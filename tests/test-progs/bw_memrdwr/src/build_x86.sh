@@ -1,0 +1,1 @@
+g++ -I ./../../../../include/gem5 -O3 -o threads threads.cpp -pthread -static -g -std=c++11

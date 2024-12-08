@@ -1,0 +1,1 @@
+./tests/test-progs/bw_memrdwr/src/threads 1M 1 1 rd

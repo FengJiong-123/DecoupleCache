@@ -234,9 +234,10 @@ def create_system(
                 start_index_bit=l2_index_start,
             )
 
-            SF = RubySnoopFilter(
-                dir_bit_num=14,
-                dir_ass_num=3,
+            SF = L2Cache(
+                size=options.l2_size,
+                assoc=options.l2_assoc,
+                start_index_bit=l2_index_start,
             )
 
             l2_cntrl = L2Cache_Controller(

@@ -207,15 +207,16 @@ structure (DirectoryMemory, external = "yes") {
   void recordRequestType(DirectoryRequestType);
 }
 
-structure (SnoopFilter, external = "yes") {
-  AbstractCacheEntry lookup(Addr, bool);
-  bool allocate(Addr, AbstractCacheEntry);
-  bool isPresent(Addr);
-  void deallocate(Addr);
-  Addr cacheProbe(Addr);
-  void makeComplete(Addr);
-  void makeInComplete(Addr);
-}
+// structure (SnoopFilter, external = "yes") {
+//   AbstractCacheEntry lookup(Addr);
+//   bool allocate(Addr, AbstractCacheEntry);
+//   bool isPresent(Addr);
+//   void deallocate(Addr);
+//   Addr cacheProbe(Addr);
+//   void makeComplete(Addr);
+//   void makeInComplete(Addr);
+//   void setMRU(Addr);
+// }
 
 structure (CacheMemory, external = "yes") {
   bool cacheAvail(Addr);

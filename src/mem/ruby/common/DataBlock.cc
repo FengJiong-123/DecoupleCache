@@ -42,6 +42,7 @@
 
 #include "mem/ruby/common/WriteMask.hh"
 #include "mem/ruby/system/RubySystem.hh"
+#include "debug/RubySlicc.hh"
 
 namespace gem5
 {
@@ -190,6 +191,11 @@ DataBlock::operator=(const DataBlock & obj)
     // If this data block is involved in an atomic operation, the effect
     // of applying the atomic operations on the data block are recorded in
     // m_atomicLog. If so, we must copy over every entry in the change log
+    DPRINTF(RubySlicc, "DataBlock::size=%d\n", obj.m_atomicLog.size());
+    if (obj.m_atomicLog.size() > 0) {
+        // if atomic has fake value, directly ignore copy.
+        return *this;
+    }
     for (size_t i = 0; i < obj.m_atomicLog.size(); i++) {
         block_update = new uint8_t[block_bytes];
         memcpy(block_update, obj.m_atomicLog[i], block_bytes);

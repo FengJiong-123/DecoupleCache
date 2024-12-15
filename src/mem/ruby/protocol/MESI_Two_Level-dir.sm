@@ -67,7 +67,7 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     DMA_READ, desc="A DMA Read memory request";
     DMA_WRITE, desc="A DMA Write memory request";
     CleanReplacement, desc="Clean Replacement in L2 cache";
-
+    CleanReplacement_Silent, desc="Clean Replacement silent in L2 cache";
   }
 
   // TYPES
@@ -198,6 +198,8 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     if (requestNetwork_in.isReady(clockEdge())) {
       peek(requestNetwork_in, RequestMsg) {
         assert(in_msg.Destination.isElement(machineID));
+        DPRINTF(RubySlicc, "requestNetwork_in::addr=%x, type=%d\n"
+                         , in_msg.addr, in_msg.Type);
         if (isGETRequest(in_msg.Type)) {
           trigger(Event:Fetch, in_msg.addr, TBEs[in_msg.addr]);
         } else if (in_msg.Type == CoherenceRequestType:DMA_READ) {
@@ -217,11 +219,18 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
   in_port(responseNetwork_in, ResponseMsg, responseToDir, rank = 1) {
     if (responseNetwork_in.isReady(clockEdge())) {
       peek(responseNetwork_in, ResponseMsg) {
+        TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "responseL2Network_in::addr=%x State: %s Sender: %s Type: %s Dest: %s\n",
+                in_msg.addr, getState(tbe, in_msg.addr),
+                in_msg.Sender, in_msg.Type, in_msg.Destination);
+
         assert(in_msg.Destination.isElement(machineID));
         if (in_msg.Type == CoherenceResponseType:MEMORY_DATA) {
           trigger(Event:Data, in_msg.addr, TBEs[in_msg.addr]);
         } else if (in_msg.Type == CoherenceResponseType:ACK) {
           trigger(Event:CleanReplacement, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (in_msg.Type == CoherenceResponseType:ACK_Silent) {
+          trigger(Event:CleanReplacement_Silent, in_msg.addr, TBEs[in_msg.addr]);
         } else {
           DPRINTF(RubySlicc, "%s\n", in_msg.Type);
           error("Invalid message");
@@ -474,7 +483,12 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     kd_wakeUpDependents;
   }
 
-  transition(M, Data, MI) {
+  transition({M,I}, CleanReplacement_Silent, I) {
+    k_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition({M,I}, Data, MI) {
     qw_queueMemoryWBRequest;
     k_popIncomingResponseQueue;
   }

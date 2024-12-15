@@ -420,6 +420,8 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
 
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "messgeBuffer_in::addr=%x, class=%d\n"
+                         , in_msg.addr, in_msg.Class);
 
         if(in_msg.Class == CoherenceClass:DATA_EXCLUSIVE) {
             trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
@@ -456,6 +458,8 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
       peek(mandatoryQueue_in, RubyRequest, block_on="LineAddress") {
 
         // Check for data access to blocks in I-cache and ifetchs to blocks in D-cache
+        DPRINTF(RubySlicc, "L0fromCPU::addr=%x, type=%d\n"
+                         , in_msg.LineAddress, in_msg.Type);
 
         if (in_msg.Type == RubyRequestType:IFETCH) {
           // ** INSTRUCTION ACCESS ***
@@ -609,6 +613,7 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
   action(fi_sendInvAck, "fi", desc="Send data to the L1 cache") {
     peek(messgeBuffer_in, CoherenceMsg) {
       enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
+        DPRINTF(RubySlicc, "fi_sendInvAck::addr=%x\n", address);
         out_msg.addr := address;
         out_msg.Class := CoherenceClass:INV_ACK;
         out_msg.Sender := machineID;

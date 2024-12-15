@@ -58,7 +58,16 @@ class L2Cache(RubyCache):
 
 #class SnoopFilter(RubySnoopFilter):
 #    pass
+class TriggerMessageBuffer(MessageBuffer):
+    """
+    MessageBuffer for triggering internal controller events.
+    These buffers should not be affected by the Ruby tester randomization
+    and allow poping messages enqueued in the same cycle.
+    """
 
+    randomization = "disabled"
+    allow_zero_latency = True
+    
 
 def define_options(parser):
     parser.add_argument(
@@ -72,6 +81,8 @@ def define_options(parser):
     parser.add_argument("--l0d_size", type=str, default="4096B")
     parser.add_argument("--l0i_assoc", type=int, default=1)
     parser.add_argument("--l0d_assoc", type=int, default=1)
+    parser.add_argument("--SF_size", type=str, default="1MB")
+    parser.add_argument("--SF_assoc", type=int, default=8)
     parser.add_argument("--l0_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l1_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l2_transitions_per_cycle", type=int, default=4)
@@ -105,6 +116,9 @@ def create_system(
     l1_cntrl_nodes = []
     l2_cntrl_nodes = []
     dma_cntrl_nodes = []
+    print("l1 size:", options.l1d_size, " l1 assoc:", options.l1d_assoc)
+    print("l2 size:", options.l2_size, " l2 assoc:", options.l2_assoc)
+    print("SF size:", options.SF_size, " SF assoc:", options.SF_assoc)
 
     assert options.num_cpus % options.num_clusters == 0
     num_cpus_per_cluster = options.num_cpus // options.num_clusters
@@ -235,8 +249,8 @@ def create_system(
             )
 
             SF = L2Cache(
-                size=options.l2_size,
-                assoc=options.l2_assoc,
+                size=options.SF_size,
+                assoc=options.SF_assoc,
                 start_index_bit=l2_index_start,
             )
 
@@ -276,6 +290,8 @@ def create_system(
             l2_cntrl.L1RequestToL2Cache.in_port = ruby_system.network.out_port
             l2_cntrl.responseToL2Cache = MessageBuffer()
             l2_cntrl.responseToL2Cache.in_port = ruby_system.network.out_port
+
+            l2_cntrl.TriggerPort = TriggerMessageBuffer()
 
     # Run each of the ruby memory controllers at a ratio of the frequency of
     # the ruby system

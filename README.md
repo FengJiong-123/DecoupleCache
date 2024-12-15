@@ -111,7 +111,7 @@ or start discussions. To join the mailing list please visit
 3. git commit -m "[XXX]: describe this commit, like bug fix, add ...function"
    XXX is the module name, you can choose from [DTD Slicc] [DTD interface] [Cache Slicc] [Script] [Config] ...
    !!!!Please follow the naming rules for easier co-work 
-4. git push -u origin HEAD:die-to-die
+4. git push -u origin HEAD:die-to-die/main
 
 * **Docker**:
 docker run -it --cap-add=SYS_PTRACE --security-opt seccomp=unconfined -v $(pwd):/mnt --rm --name Gem5Jfeng gem5_jfeng
@@ -131,3 +131,5 @@ build/X86_CHI/gem5.opt -d traffic_gen/ configs/example/garnet_synth_traffic.py -
 build/X86_CHI/gem5.opt -d bwmem_chi configs/deprecated/example/se.py -n 4 --num-l2caches 4 --num-l3caches 4 --l1i_size 32kB --l1i_assoc 4 --l1d_size 32kB --l1d_assoc 4 --l2_size 512kB --l2_assoc 8 --l3_size 1MB --l3_assoc 8 --num-dirs 2 --ruby --topology=CustomMesh --chi-config=configs/example/noc_config/2x4.py --network=garnet -m 9333752530000 --xor-low-bit 60 --cpu-type O3CPU --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='1K 4 1 rd'
 
 build/X86_MESI_Three_Level/gem5.opt -d bwmem_mesi configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=512kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='1K 4 1 rd'
+
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=8MB --l1d_assoc=8 --l2_size=1MB --l2_assoc=16 --SF_size=2MB --SF_assoc=16 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='16M 1 1 rd'

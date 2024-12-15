@@ -191,7 +191,6 @@ DataBlock::operator=(const DataBlock & obj)
     // If this data block is involved in an atomic operation, the effect
     // of applying the atomic operations on the data block are recorded in
     // m_atomicLog. If so, we must copy over every entry in the change log
-    DPRINTF(RubySlicc, "DataBlock::size=%d\n", obj.m_atomicLog.size());
     if (obj.m_atomicLog.size() > 0) {
         // if atomic has fake value, directly ignore copy.
         return *this;

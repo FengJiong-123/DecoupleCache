@@ -293,6 +293,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "responseNetwork_in::addr=%x, sender=%d, type=%d, pendingack=%d, ackcount=%d\n"
+                         , in_msg.addr, in_msg.Sender, in_msg.Type, getPendingAcks(tbe), in_msg.AckCount);
 
         if(in_msg.Type == CoherenceResponseType:DATA_EXCLUSIVE) {
           trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
@@ -330,6 +332,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         assert(in_msg.Destination.isElement(machineID));
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "requestNetwork_in::addr=%x, type=%d, cache valid=%d\n"
+                         , in_msg.addr, in_msg.Type, is_valid(cache_entry));
 
         if (in_msg.Type == CoherenceRequestType:INV) {
             if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
@@ -366,6 +370,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
       peek(messageBufferFromL0_in, CoherenceMsg) {
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "messageBufferFromL0_in::addr=%x, class=%d, cache valid=%d\n"
+                         , in_msg.addr, in_msg.Class, is_valid(cache_entry));
 
         if(in_msg.Class == CoherenceClass:INV_DATA) {
             trigger(Event:L0_DataAck, in_msg.addr, cache_entry, tbe);
@@ -390,6 +396,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
                     Addr victim := cache.cacheProbe(in_msg.addr);
                     Entry victim_entry := getCacheEntry(victim);
                     TBE victim_tbe := TBEs[victim];
+                    DPRINTF(RubySlicc, "messageBufferFromL0_in::L1 eviction::addr=%x, cache valid=%d, state=%d\n"
+                                     , victim, is_valid(victim_entry), victim_entry.CacheState);
 
                     if (is_valid(victim_entry) && inL0Cache(victim_entry.CacheState)) {
                         trigger(Event:L0_Invalidate_Own,
@@ -476,6 +484,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   action(d2_sendDataToL2, "d2", desc="send data to the L2 cache because of M downgrade") {
     enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
       assert(is_valid(cache_entry));
+      DPRINTF(RubySlicc, "d2_sendDataToL2::addr=%x, state=%d\n"
+                       , address, cache_entry.CacheState);
       out_msg.addr := address;
       out_msg.Type := CoherenceResponseType:DATA;
       out_msg.DataBlk := cache_entry.DataBlk;
@@ -571,6 +581,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
   action(forward_eviction_to_L0_own, "\cc", desc="sends (own) eviction information to the processor") {
       enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+          DPRINTF(RubySlicc, "forward_eviction_to_L0_own::addr=%x\n", address);
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:INV_OWN;
           out_msg.Sender := machineID;
@@ -581,6 +592,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
   action(forward_eviction_to_L0_else, "\cce", desc="sends (else) eviction information to the processor") {
       enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+          DPRINTF(RubySlicc, "forward_eviction_to_L0_else::addr=%x\n", address);
           out_msg.addr := address;
           out_msg.Class := CoherenceClass:INV_ELSE;
           out_msg.Sender := machineID;
@@ -621,6 +633,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
   action(jj_sendExclusiveUnblock, "\j", desc="send unblock to the L2 cache") {
     enqueue(unblockNetwork_out, ResponseMsg, to_l2_latency) {
+      DPRINTF(RubySlicc, "jj_sendExclusiveUnblock::addr=%x\n", address);
       out_msg.addr := address;
       out_msg.Type := CoherenceResponseType:EXCLUSIVE_UNBLOCK;
       out_msg.Sender := machineID;
@@ -680,6 +693,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
    }
 
   action(i_allocateTBE, "i", desc="Allocate TBE (number of invalidates=0)") {
+    DPRINTF(RubySlicc, "i_allocateTBE::addr=%x\n", address);
     check_allocate(TBEs);
     assert(is_valid(cache_entry));
     TBEs.allocate(address);
@@ -750,6 +764,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   action(ff_deallocateCacheBlock, "\f",
          desc="Deallocate L1 cache block.") {
     if (cache.isTagPresent(address)) {
+      DPRINTF(RubySlicc, "ff_deallocateCacheBlock::addr=%x, state=%d\n"
+                       , address, getCacheEntry(address).CacheState);
       cache.deallocate(address);
     }
     unset_cache_entry();
@@ -1063,6 +1079,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   transition({M_IL0, MM_IL0}, L0_Ack, MM) {
+    //d2_sendDataToL2;
     k_popL0RequestQueue;
     kd_wakeUpDependents;
   }
@@ -1078,6 +1095,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   transition(SM_IL0, L0_Ack, IM) {
+    //d2_sendDataToL2;
     k_popL0RequestQueue;
     kd_wakeUpDependents;
   }

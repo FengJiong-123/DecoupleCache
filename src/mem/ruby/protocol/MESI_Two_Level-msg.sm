@@ -41,6 +41,8 @@ enumeration(CoherenceRequestType, desc="...") {
 
   DMA_READ, desc="DMA Read";
   DMA_WRITE, desc="DMA Write";
+
+  EVC, desc="cache eviction";
 }
 
 // CoherenceResponseType
@@ -50,6 +52,7 @@ enumeration(CoherenceResponseType, desc="...") {
   DATA_EXCLUSIVE, desc="Data block for L1 cache in M/E state";
   MEMORY_DATA, desc="Data block from / to main memory";
   ACK, desc="Generic invalidate ack";
+  ACK_Silent, desc="tell memory to silent move M to I";
   WB_ACK, desc="writeback ack";
   UNBLOCK, desc="unblock";
   EXCLUSIVE_UNBLOCK, desc="exclusive unblock";

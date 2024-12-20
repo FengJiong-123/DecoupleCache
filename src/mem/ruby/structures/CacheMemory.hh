@@ -143,6 +143,10 @@ class CacheMemory : public SimObject
     void clearLockedAll (int context);
     bool isLocked (Addr addr, int context);
 
+    // functions for set and remove pending address
+    void savePendingAddr(Addr address);
+    void removePendingAddr(Addr address);
+
     // Print cache contents
     void print(std::ostream& out) const;
     void printData(std::ostream& out) const;
@@ -181,6 +185,7 @@ class CacheMemory : public SimObject
     // The second index is the the amount associativity.
     std::unordered_map<Addr, int> m_tag_index;
     std::vector<std::vector<AbstractCacheEntry*> > m_cache;
+    std::vector<std::vector<Addr>> m_set_pending_addr;
 
     /** We use the replacement policies from the Classic memory system. */
     replacement_policy::Base *m_replacementPolicy_ptr;
@@ -193,6 +198,7 @@ class CacheMemory : public SimObject
     int m_cache_num_sets;
     int m_cache_num_set_bits;
     int m_cache_assoc;
+    int m_new_replacement;
     int m_start_index_bit;
     bool m_resource_stalls;
     int m_block_size;

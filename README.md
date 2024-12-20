@@ -133,3 +133,30 @@ build/X86_CHI/gem5.opt -d bwmem_chi configs/deprecated/example/se.py -n 4 --num-
 build/X86_MESI_Three_Level/gem5.opt -d bwmem_mesi configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=512kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='1K 4 1 rd'
 
 build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=8MB --l1d_assoc=8 --l2_size=1MB --l2_assoc=16 --SF_size=2MB --SF_assoc=16 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='16M 1 1 rd'
+
+* **small regression**:
+## Single Thread
+* L1 evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --SF_size=1MB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 1 1 rd'
+
+* L2 cache evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1kB --l2_assoc=8 --SF_size=1MB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 1 1 rd'
+
+* L2 SF evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --SF_size=1kB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 1 1 rd'
+
+* All evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1kB --l2_assoc=8 --SF_size=1kB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 1 1 rd'
+
+## Multi Thread
+* L1 evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --SF_size=1MB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 4 1 rd'
+
+* L2 cache evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1kB --l2_assoc=8 --SF_size=1MB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 4 1 rd'
+
+* L2 SF evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1MB --l2_assoc=8 --SF_size=1kB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 4 1 rd'
+
+* All evictions:
+build/X86_MESI_Three_Level_Test/gem5.opt -d bwmem_mesi --debug-flag=RubySlicc --debug-file=debug.txt --debug-start=129012000 --debug-end=131912000 configs/deprecated/example/se.py --num-cpus=4 --l0i_size=32kB --l0i_assoc=4 --l0d_size=32kB --l0d_assoc=4 --cpu-type O3CPU --caches --l2cache --ruby --num-dirs=4 --num-l2caches=4 --l1d_size=256kB --l1d_assoc=8 --l2_size=1kB --l2_assoc=8 --SF_size=1kB --SF_assoc=8 --network=garnet --topology=MeshDirCorners_XY --mesh-rows=2 --cmd 'tests/test-progs/bw_memrdwr/src/threads' --options='512k 4 1 rd'

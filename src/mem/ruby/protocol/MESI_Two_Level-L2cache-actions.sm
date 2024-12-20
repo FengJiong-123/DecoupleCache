@@ -21,7 +21,6 @@ action(a_issueFetchToMemory, "a", desc="fetch data from memory") {
 
 action(b_forwardRequestToExclusive, "b", desc="Forward request to the exclusive L1") {
     peek(L1RequestL2Network_in, RequestMsg) {
-        assert(is_valid(cache_entry));
         if(is_invalid(getDirEntry(address))) {
             // allocate directory entry
             assert(!SF.isTagPresent(address));
@@ -31,12 +30,13 @@ action(b_forwardRequestToExclusive, "b", desc="Forward request to the exclusive 
             addSharer(address, in_msg.Requestor, getDirEntry(address));
         }
         DirEntry dir_entry := getDirEntry(address);
-        DPRINTF(RubySlicc, "b_forwardRequestToExclusive::addr=%x, requestor=%d, dir count=%d\n"
-                         , address, in_msg.Requestor, dir_entry.Sharers.count());
+        DPRINTF(RubySlicc, "b_forwardRequestToExclusive::addr=%x, requestor=%d, dir count=%d, cache valid=%d\n"
+                         , address, in_msg.Requestor, dir_entry.Sharers.count(), is_valid(cache_entry));
 
         assert(dir_entry.Sharers.count() == 1);
         if (dir_entry.Sharers.isElement(in_msg.Requestor)) {
             // this is the situation that cache is avail
+            assert(is_valid(cache_entry));
             // but directory is invalid
             enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
                 out_msg.addr := address;
@@ -180,15 +180,29 @@ action(dd_sendExclusiveDataToRequestor, "dd", desc="Send data from cache to reqe
 
 action(ds_sendSharedDataToRequestor, "ds", desc="Send data from cache to reqeustor") {
     peek(L1RequestL2Network_in, RequestMsg) {
-        enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
-            assert(is_valid(cache_entry));
-            out_msg.addr := address;
-            out_msg.Type := CoherenceResponseType:DATA;
-            out_msg.Sender := machineID;
-            out_msg.Destination.add(in_msg.Requestor);
-            out_msg.DataBlk := tbe.DataBlk;
-            out_msg.MessageSize := MessageSizeType:Response_Data;
-            out_msg.AckCount := 0;
+        DirEntry dir_entry := getDirEntry(address);
+        DPRINTF(RubySlicc, "ds_sendSharedDataToRequestor::addr=%x, cache valid=%d, dir valid=%d\n"
+                         , address, is_valid(cache_entry), is_valid(dir_entry));
+        if (is_valid(cache_entry)) {
+            enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
+                out_msg.addr := address;
+                out_msg.Type := CoherenceResponseType:DATA;
+                out_msg.Sender := machineID;
+                out_msg.Destination.add(in_msg.Requestor);
+                out_msg.DataBlk := cache_entry.DataBlk;
+                out_msg.MessageSize := MessageSizeType:Response_Data;
+                out_msg.AckCount := 0;
+            } 
+        } else {
+            enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
+                assert(is_valid(dir_entry));
+                //assert(dir_entry.Sharers.count() > 1);
+                out_msg.addr := address;
+                out_msg.Type := in_msg.Type;
+                out_msg.Requestor := in_msg.Requestor;
+                out_msg.Destination.add(dir_entry.Sharers.smallestElement());
+                out_msg.MessageSize := MessageSizeType:Request_Control;
+            }
         }
     }
 }
@@ -250,7 +264,7 @@ action(f_sendInvToSharers, "f", desc="invalidate sharers for L2 replacement") {
         assert(is_valid(tbe));
         DPRINTF(RubySlicc, "f_sendInvToSharers::addr=%x, dest=%s\n"
                          , address, dir_entry.Sharers);
-        tbe.toEvict  := true;
+        tbe.dirToEvict  := true;
         out_msg.addr := address;
         out_msg.Type := CoherenceRequestType:INV;
         out_msg.Requestor := machineID;
@@ -278,7 +292,7 @@ action(fwm_sendFwdInvToSharersMinusRequestor, "fwm", desc="invalidate sharers fo
     peek(L1RequestL2Network_in, RequestMsg) {
         enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
             DirEntry dir_entry := getDirEntry(address);
-            assert(is_valid(cache_entry));
+            //assert(is_valid(cache_entry));
             assert(is_valid(dir_entry));
             out_msg.addr := address;
             out_msg.Type := CoherenceRequestType:INV;
@@ -307,7 +321,6 @@ action(i_allocateTBE, "i", desc="Allocate TBE for request") {
     }
     if (is_valid(dir_entry)) {
         tbe.pendingAcks := dir_entry.Sharers.count();
-        //tbe.toEvict := dir_entry.toEvict;
     }
 }
 
@@ -366,6 +379,7 @@ action(mr_writeDataToCacheFromRequest, "mr", desc="Write data from request queue
                     set_cache_entry(L2cache.allocate(address, new CacheEntry));
                     cache_entry.DataBlk := in_msg.DataBlk;
                     cache_entry.Dirty := in_msg.Dirty;
+                    L2cache.removePendingAddr(in_msg.addr);
                 } else {
                     // need replacement
                     Addr victim := L2cache.cacheProbe(in_msg.addr);
@@ -391,7 +405,12 @@ action(mr_writeDataToCacheFromRequest, "mr", desc="Write data from request queue
             } else {
                 cache_entry.DataBlk := in_msg.DataBlk;
                 cache_entry.Dirty := in_msg.Dirty;
+                L2cache.removePendingAddr(in_msg.addr);
             }
+        } else {
+            // for clean write back, still need to remove
+            // possible pending address
+            L2cache.removePendingAddr(in_msg.addr);
         }
         if (is_valid(cache_entry)) {
             // trigger PUTX-end
@@ -422,10 +441,20 @@ action(mr_writeDataToCacheFromRespond, "mrs", desc="Write data from response que
                          , in_msg.addr, in_msg.Dirty);
         // need to allocate cache
         if (is_invalid(cache_entry)) {
-            assert(L2cache.cacheAvail(address));
-            set_cache_entry(L2cache.allocate(address, new CacheEntry));
-            cache_entry.DataBlk := in_msg.DataBlk;
-            cache_entry.Dirty := in_msg.Dirty;
+            if (getState(tbe, cache_entry, address) == State:I_I && 
+                isCacheToEvict(tbe) && !L2cache.cacheAvail(address)) {
+                // here is the situation that directory eviction
+                // encounter cache eviction, we deallocate cache
+                // entry first and set state to I_I. However, the
+                // directory EV creates back invalidation. Therefore,
+                // we do not allocate this cache entry again when
+                // cache is unavailable
+            } else {
+                assert(L2cache.cacheAvail(address));
+                set_cache_entry(L2cache.allocate(address, new CacheEntry));
+                cache_entry.DataBlk := in_msg.DataBlk;
+                cache_entry.Dirty := in_msg.Dirty;
+            }
             // } else {
             //     // need replacement
             //     assert(false);
@@ -458,10 +487,14 @@ action(mr_writeDataToCacheFromRespond, "mrs", desc="Write data from response que
 
 action(c_checkCache, "ccc", desc="Check cache can be allocate before back invalidation") {
     //peek(L1RequestL2Network_in, RequestMsg) {
-    assert(is_valid(tbe));
-    assert(tbe.toEvict);
-    DPRINTF(RubySlicc, "c_checkCache::addr=%x\n", address);
-    if (!L2cache.cacheAvail(address)) {
+    //assert(is_valid(tbe));
+    bool request_need_allocate_cache := needAllocateCache(getState(tbe, cache_entry, address), address, cache_entry);
+    bool evict_need_allocate_cache := isCacheToEvict(tbe) || isDirToEvict(tbe);
+    //assert(evict_need_allocate_cache || request_need_allocate_cache);
+    DPRINTF(RubySlicc, "c_checkCache::addr=%x, evict_need_ac=%d, request_need_ac=%d\n"
+                    , address, evict_need_allocate_cache, request_need_allocate_cache);
+
+    if (!L2cache.cacheAvail(address) && (evict_need_allocate_cache || request_need_allocate_cache)) {
         Addr victim := L2cache.cacheProbe(address);
         CacheEntry L2cache_entry := getCacheEntry(victim);
         TBE tbe_victim := TBEs[victim];
@@ -480,9 +513,29 @@ action(c_checkCache, "ccc", desc="Check cache can be allocate before back invali
             out_msg.Dirty := L2cache_entry.Dirty;
             //out_msg.Prefetch := in_msg.Prefetch;
         }
+        // directly allocate cache here
+        // otherwise, the other request
+        // will opccupy the cache line
+        // set_cache_entry(L2cache.allocate(address, new CacheEntry));
+        // save cache line for incoming request
+        L2cache_entry.aheadAllocate := true;
+        L2cache_entry.aheadAddr := address;
+
+    } else if (evict_need_allocate_cache || request_need_allocate_cache) {
+        // still need save pending address
+        L2cache.savePendingAddr(address);
     }
     //}
 }
+
+// action(iw_insertAndWaitTriggerPort, "iw", desc="insert SF replacement into Trigger port and wait") {
+//     enqueue(triggerOutPort, RequestMsg, 0) {
+//         DPRINTF(RubySlicc, "iw_insertAndWaitTriggerPort::addr=%x\n", address);
+//         out_msg.addr := address;
+//         out_msg.Type := CoherenceRequestType:SF_EVC;
+//     }
+//     stall_and_wait(triggerInPort, address);
+// }
 
 action(q_updateAck, "q", desc="update pending ack count") {
     peek(responseL2Network_in, ResponseMsg) {
@@ -539,6 +592,7 @@ action(qq_allocateDirBlock, "\qdir", desc="Set dir tag equal to tag of block B."
     if (is_invalid(dir_entry)) {
         assert(!SF.isTagPresent(address));
         SF.allocate(address, new DirEntry);
+        SF.removePendingAddr(address);
     }
 }
 
@@ -550,13 +604,21 @@ action(rr_deallocateL2CacheBlock, "\r", desc="Deallocate L2 cache block.  Sets t
         }
     }
     assert(is_valid(tbe));
+    assert(is_valid(cache_entry));
     // set tbe to be eivct
     // but may encounter BUG
-    tbe.toEvict := isCacheEvict;
-    DPRINTF(RubySlicc, "rr_deallocateL2CacheBlock::addr=%x, isCacheEvict=%d\n"
-                     , address, isCacheEvict);
+    tbe.cacheToEvict := isCacheEvict;
+    bool ahead_allocate := cache_entry.aheadAllocate;
+    Addr ahead_addr := cache_entry.aheadAddr;
+    DPRINTF(RubySlicc, "rr_deallocateL2CacheBlock::addr=%x, isCacheEvict=%d, allocaahead=%d, aheadAddr=%x\n"
+                     , address, isCacheEvict, cache_entry.aheadAllocate, cache_entry.aheadAddr);
     L2cache.deallocate(address);
     unset_cache_entry();
+    if (ahead_allocate) {
+        //set_cache_entry(L2cache.allocate(ahead_addr, new CacheEntry));
+        //L2cache.setMRU(ahead_addr);
+        L2cache.savePendingAddr(ahead_addr);
+    }
 }
 
 action(rr_deallocateDirBlock, "\rdir", desc="Deallocate dir.  Sets the dir to not present, allowing a replacement in parallel with a fetch.") {
@@ -595,8 +657,11 @@ action(ts_sendInvAckToUpgrader, "ts", desc="Send ACK to upgrader") {
     peek(L1RequestL2Network_in, RequestMsg) {
         enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
             DirEntry dir_entry := getDirEntry(address);
-            assert(is_valid(cache_entry));
+            //assert(is_valid(cache_entry));
             assert(is_valid(dir_entry));
+            DPRINTF(RubySlicc, "ts_sendInvAckToUpgrader::addr=%x, requestor=%d, dir_sharers=%d\n"
+                             , address, in_msg.Requestor, dir_entry.Sharers);
+            assert(dir_entry.Sharers.isElement(in_msg.Requestor));
             out_msg.addr := address;
             out_msg.Type := CoherenceResponseType:ACK;
             out_msg.Sender := machineID;
@@ -628,7 +693,8 @@ action(nn_addSharer, "\n", desc="Add L1 sharer to list") {
 action(nnu_addSharerFromUnblock, "\nu", desc="Add L1 sharer to list") {
     peek(L1unblockNetwork_in, ResponseMsg) {
         DirEntry dir_entry := getDirEntry(address);
-        assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "nnu_addSharerFromUnblock::addr=%x\n", address);
+        //assert(is_valid(cache_entry));
         assert(is_valid(dir_entry));
         addSharer(address, in_msg.Sender, dir_entry);
     }
@@ -689,8 +755,21 @@ action(mm_markExclusive, "\m", desc="set the exclusive owner") {
     }
 }
 
+action(mmd_markExclusiveFromDir, "\md", desc="set the exclusive owner") {
+    DirEntry dir_entry := getDirEntry(address);
+    assert(is_valid(dir_entry));
+    assert(dir_entry.Sharers.count() == 1);
+    //dir_entry.Sharers.clear();
+    dir_entry.Exclusive := dir_entry.Sharers.smallestElement();
+    //addSharer(address, in_msg.Sender, dir_entry);
+    DPRINTF(RubySlicc, "mmd_markExclusiveFromDir::addr=%x, exclusive=%d\n"
+                        , address, dir_entry.Exclusive);
+}
+
 action(mmu_markExclusiveFromUnblock, "\mu", desc="set the exclusive owner") {
     peek(L1unblockNetwork_in, ResponseMsg) {
+        DPRINTF(RubySlicc, "mmu_markExclusiveFromUnblock::addr=%x, exclusive=%d\n"
+                         , address, in_msg.Sender);
         DirEntry dir_entry := getDirEntry(address);
         //assert(is_valid(cache_entry));
         assert(is_valid(dir_entry));
@@ -700,8 +779,16 @@ action(mmu_markExclusiveFromUnblock, "\mu", desc="set the exclusive owner") {
     }
 }
 
+action(rp_removeCachePendingAddr, "rp", desc="remove pending address") {
+    L2cache.removePendingAddr(address);
+}
+
 action(zz_stallAndWaitL1RequestQueue, "zz", desc="recycle L1 request queue") {
     stall_and_wait(L1RequestL2Network_in, address);
+}
+
+action(zzt_stallAndWaitTriggerQueue, "zzt", desc="recycle L1 request queue") {
+    stall_and_wait(triggerInPort, address);
 }
 
 action(zn_recycleResponseNetwork, "zn", desc="recycle memory request") {
@@ -731,9 +818,14 @@ action(kd_wakeUpDependents, "kd", desc="wake-up dependents") {
 //     jj_popL1RequestQueue;
 // }
 transition({M_I, MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
-           {L1_PUTX_front, L1_PUTX_end, L1_PUTX_clean, SF_Replacement}){
+           {L1_PUTX_front, L1_PUTX_end, L1_PUTX_clean}){
     zz_stallAndWaitL1RequestQueue;
 }
+
+// transition({M_I, MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
+//            {SF_Replacement_withC, SF_Replacement}){
+//     iw_insertAndWaitTriggerPort;
+// }
 
 transition({NP, SS, M, MT}, L1_PUTX_front) {
     mr_writeDataToCacheFromRequest;
@@ -758,8 +850,22 @@ transition({NP, SS, M, MT}, L1_PUTX_clean) {
     jj_popL1RequestQueue;
 }
 
+transition(SS, L1_PUTX_clean_toM, M) {
+    kk_removeRequestSharer;
+    t_sendWBAck;
+    jj_popL1RequestQueue;
+}
+
 transition({SS,M,MT}, L2_Replacement, M_I) {
     i_allocateTBE;
+    c_exclusiveReplacement;
+    rr_deallocateL2CacheBlock;
+    jjt_popTriggerPort;
+    //rr_deallocateDirBlock;
+}
+
+transition(S_I, L2_Replacement, I_I) {
+    // dir eviction encounters cache eviction
     c_exclusiveReplacement;
     rr_deallocateL2CacheBlock;
     jjt_popTriggerPort;
@@ -777,9 +883,19 @@ transition({M,MT,SS}, SF_Replacement, I_I) {
     // directory eviction
 }
 
+transition(M_I, SF_Replacement, I_I) {
+    // cache eviction but enconter SF
+    // evicts the same address
+    f_sendInvToSharers;
+    rr_deallocateDirBlock;
+    c_checkCache;
+}
+
 transition({M,MT,SS}, SF_Replacement_withC, S_I) {
     // directory evicts with cache
     i_allocateTBE;
+    set_setMRU; 
+    // this is to enhance the priority of cache line
     f_sendInvToSharers;
     rr_deallocateDirBlock;
     c_checkCache;
@@ -799,6 +915,7 @@ transition({I_I, S_I}, Ack) {
 transition({I_I,S_I}, WB_Data, S_I) {
     q_updateAck;
     mr_writeDataToCacheFromRespond;
+    rp_removeCachePendingAddr;
     o_popIncomingResponseQueue;
 }
 
@@ -806,6 +923,7 @@ transition(I_I, Ack_all, NP) {
     tt_sendSilentToMem;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
+    rp_removeCachePendingAddr;
     kd_wakeUpDependents;
 }
 
@@ -813,11 +931,13 @@ transition(S_I, Ack_all, M) {
     //tt_sendSilentToMem;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
+    rp_removeCachePendingAddr;
     kd_wakeUpDependents;
 }
 
 transition({I_I,S_I}, WB_Data_all, M) {
     mr_writeDataToCacheFromRespond;
+    rp_removeCachePendingAddr;
     //tt_sendSilentToMem;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
@@ -825,7 +945,8 @@ transition({I_I,S_I}, WB_Data_all, M) {
 }
 
 transition({IM, IS, ISS, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, {L2_Replacement}) {
-    zz_stallAndWaitL1RequestQueue;
+    //zz_stallAndWaitL1RequestQueue;
+    zzt_stallAndWaitTriggerQueue;
 }
 
 transition({IM, IS, ISS, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, MEM_Inv) {
@@ -840,7 +961,7 @@ transition({SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, {L1_GETS, L1_GET_INSTR, L1_GETX
     zz_stallAndWaitL1RequestQueue;
 }
 
-transition(NP, L1_GETS,  ISS) {
+transition(NP, {L1_GETS, L1_GET_INSTR},  ISS) {
     //qq_allocateL2CacheBlock;
     qq_allocateDirBlock;
     ll_clearSharers;
@@ -852,17 +973,17 @@ transition(NP, L1_GETS,  ISS) {
     jj_popL1RequestQueue;
 }
 
-transition(NP, L1_GET_INSTR, IS) {
-    //qq_allocateL2CacheBlock;
-    qq_allocateDirBlock;
-    ll_clearSharers;
-    nn_addSharer;
-    i_allocateTBE;
-    ss_recordGetSL1ID;
-    a_issueFetchToMemory;
-    uu_profileMiss;
-    jj_popL1RequestQueue;
-}
+// transition(NP, L1_GET_INSTR, IS) {
+//     //qq_allocateL2CacheBlock;
+//     qq_allocateDirBlock;
+//     ll_clearSharers;
+//     nn_addSharer;
+//     i_allocateTBE;
+//     ss_recordGetSL1ID;
+//     a_issueFetchToMemory;
+//     uu_profileMiss;
+//     jj_popL1RequestQueue;
+// }
 
 transition(NP, L1_GETX, IM) {
     //qq_allocateL2CacheBlock;
@@ -887,6 +1008,10 @@ transition(ISS, Mem_Data, MT_MB) {
 
 transition(IS, Mem_Data, SS) {
     m_allocDataFromMem;
+    // allocate data into cache before
+    // enter SS state
+    mr_writeDataToCacheFromRespond;
+    rp_removeCachePendingAddr;
     e_sendDataToGetSRequestors;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
@@ -901,6 +1026,9 @@ transition(IM, Mem_Data, MT_MB) {
 }
 
 transition({IS, ISS}, {L1_GETS, L1_GET_INSTR}, IS) {
+    // TODO: need to make sure
+    // cache is avail
+    c_checkCache;
     nn_addSharer;
     ss_recordGetSL1ID;
     uu_profileMiss;
@@ -919,6 +1047,7 @@ transition(IM, {L1_GETX, L1_GETS, L1_GET_INSTR}) {
 transition(SS, {L1_GETS, L1_GET_INSTR}) {
     ds_sendSharedDataToRequestor;
     nn_addSharer;
+    c_checkCache;
     set_setMRU;
     uu_profileHit;
     jj_popL1RequestQueue;
@@ -934,7 +1063,7 @@ transition(SS, L1_GETX, SS_MB) {
     jj_popL1RequestQueue;
 }
 
-transition(SS, L1_UPGRADE, SS_MB) {
+transition({SS,M}, L1_UPGRADE, SS_MB) {
     fwm_sendFwdInvToSharersMinusRequestor;
     ts_sendInvAckToUpgrader;
     set_setMRU;
@@ -1004,6 +1133,7 @@ transition(MT, L1_GETX, MT_MB) {
 
 transition(MT, {L1_GETS, L1_GET_INSTR}, MT_IIB) {
     b_forwardRequestToExclusive;
+    c_checkCache; // need to check cache allovcation
     uu_profileMiss;
     set_setMRU;
     jj_popL1RequestQueue;
@@ -1039,13 +1169,17 @@ transition(MT_IIB, Unblock, MT_IB) {
     k_popUnblockQueue;
 }
 
-transition(MT_IIB, {WB_Data, WB_Data_clean}, MT_SB) {
-    m_writeDataToCache;
+transition({MT_IIB,SS}, {WB_Data, WB_Data_clean}, MT_SB) {
+    //m_writeDataToCache;
+    mr_writeDataToCacheFromRespond;
+    rp_removeCachePendingAddr;
     o_popIncomingResponseQueue;
 }
 
 transition(MT_IB, {WB_Data, WB_Data_clean}, SS) {
-    m_writeDataToCache;
+    //m_writeDataToCache;
+    mr_writeDataToCacheFromRespond;
+    rp_removeCachePendingAddr;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;
 }
@@ -1117,7 +1251,14 @@ transition(M_I, Mem_Ack, NP) {
     kd_wakeUpDependents;
 }
 
-transition(M_I, Mem_Ack_M, M) {
+transition({S_I,I_I,NP,M}, Mem_Ack) {
+    // this is for cache eviction but
+    // encouters SF eviction
+    o_popIncomingResponseQueue;
+}
+
+transition(M_I, Mem_Ack_MT, MT) {
+    mmd_markExclusiveFromDir;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;

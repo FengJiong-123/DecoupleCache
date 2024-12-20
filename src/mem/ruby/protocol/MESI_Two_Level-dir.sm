@@ -477,15 +477,19 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     kd_wakeUpDependents;
   }
 //added by SS
-  transition(M, CleanReplacement, I) {
+  transition({M,I}, CleanReplacement, I) {
     a_sendAck;
     k_popIncomingResponseQueue;
     kd_wakeUpDependents;
   }
 
-  transition({M,I}, CleanReplacement_Silent, I) {
+  transition({M,I,IM}, CleanReplacement_Silent, I) {
     k_popIncomingResponseQueue;
     kd_wakeUpDependents;
+  }
+
+  transition(MI, CleanReplacement_Silent) {
+    k_popIncomingResponseQueue;
   }
 
   transition({M,I}, Data, MI) {

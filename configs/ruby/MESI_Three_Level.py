@@ -146,13 +146,17 @@ def create_system(
                 start_index_bit=block_size_bits,
                 replacement_policy=LRURP(),
             )
+            print(l0i_cache.size, l0i_cache.assoc, l0i_cache.replacement_policy
+                , l0i_cache.start_index_bit, l0i_cache.is_icache, l0i_cache.block_size
+                , l0i_cache.dataArrayBanks, l0i_cache.tagArrayBanks, l0i_cache.dataAccessLatency
+                , l0i_cache.tagAccessLatency, l0i_cache.resourceStalls, l0i_cache.ruby_system)
 
             l0d_cache = L0Cache(
                 size=options.l0d_size,
                 assoc=options.l0d_assoc,
                 is_icache=False,
                 start_index_bit=block_size_bits,
-                replacement_policy=LRURP(),
+                #replacement_policy=LRURP(),
             )
 
             clk_domain = cpus[i].clk_domain

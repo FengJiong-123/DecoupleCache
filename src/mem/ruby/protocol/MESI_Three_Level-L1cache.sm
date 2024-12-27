@@ -110,6 +110,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     L0_DataAck,      desc="L0 received INV message";
 
     Inv,           desc="Invalidate request from L2 bank";
+    Inv_SD,        desc="Invalidate request from L2 bank, need send data to L2";
 
     // internally generated requests:
     L0_Invalidate_Own,  desc="Invalidate line in L0, due to this cache's (L1) requirements";
@@ -117,8 +118,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     L1_Replacement,     desc="Invalidate line in this cache (L1), due to another cache's requirements";
 
     // other requests
-    Fwd_GETX,   desc="GETX from other processor";
-    Fwd_GETS,   desc="GETS from other processor";
+    Fwd_GETX,       desc="GETX from other processor";
+    //Fwd_GETX_NDB,   desc="GETX from other processor without data back to L2";
+    Fwd_GETS,       desc="GETS from other processor";
 
     Data,       desc="Data for processor";
     Data_Exclusive,       desc="Data for processor";
@@ -266,6 +268,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   int getPendingAcks(TBE tbe) {
+    if (is_invalid(tbe)) {
+      return 0;
+    }
     return tbe.pendingAcks;
   }
 
@@ -278,6 +283,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     }
 
     return false;
+  }
+
+  bool isDirty(Entry cache_entry) {
+    if(is_invalid(cache_entry)) {
+      return false;
+    }
+    return cache_entry.Dirty;
   }
 
   out_port(requestNetwork_out, RequestMsg, requestToL2);
@@ -293,8 +305,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "responseNetwork_in::addr=%x, sender=%d, type=%d, pendingack=%d, ackcount=%d\n"
-                         , in_msg.addr, in_msg.Sender, in_msg.Type, getPendingAcks(tbe), in_msg.AckCount);
+        DPRINTF(RubySlicc, "responseNetwork_in::addr=%x, sender=%d, type=%d, tbe valid=%d, pendingack=%d, ackcount=%d, id dirty=%d\n"
+                         , in_msg.addr, in_msg.Sender, in_msg.Type, is_valid(tbe), getPendingAcks(tbe), in_msg.AckCount
+                         , in_msg.Dirty);
 
         if(in_msg.Type == CoherenceResponseType:DATA_EXCLUSIVE) {
           trigger(Event:Data_Exclusive, in_msg.addr, cache_entry, tbe);
@@ -332,8 +345,10 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         assert(in_msg.Destination.isElement(machineID));
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "requestNetwork_in::addr=%x, type=%d, cache valid=%d\n"
-                         , in_msg.addr, in_msg.Type, is_valid(cache_entry));
+        State state := getState(tbe, cache_entry, in_msg.addr);
+        DPRINTF(RubySlicc, "requestNetwork_in::addr=%x, type=%d, requestor=%d, state=%d, cache valid=%d\n"
+                         , in_msg.addr, in_msg.Type, in_msg.Requestor
+                         , state, is_valid(cache_entry));
 
         if (in_msg.Type == CoherenceRequestType:INV) {
             if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
@@ -341,6 +356,18 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
                         cache_entry, tbe);
             }  else {
                 trigger(Event:Inv, in_msg.addr, cache_entry, tbe);
+            }
+        } else if (in_msg.Type == CoherenceRequestType:INV_EVC) {
+            if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
+                trigger(Event:L0_Invalidate_Else, in_msg.addr,
+                        cache_entry, tbe);
+            } else {
+              if (isDirty(cache_entry) && 
+                 (state == State:EE || state == State:SS)) {
+                trigger(Event:Inv_SD, in_msg.addr, cache_entry, tbe);
+              } else {
+                trigger(Event:Inv, in_msg.addr, cache_entry, tbe);
+              }
             }
         } else if (in_msg.Type == CoherenceRequestType:GETX ||
                    in_msg.Type == CoherenceRequestType:UPGRADE) {
@@ -350,6 +377,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
             } else {
                 trigger(Event:Fwd_GETX, in_msg.addr, cache_entry, tbe);
             }
+        // } else if (in_msg.Type == CoherenceRequestType:GETX_NO_DB) {
+        //     if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
+        //         trigger(Event:L0_Invalidate_Else, in_msg.addr,
+        //                 cache_entry, tbe);
+        //     } else {
+        //         trigger(Event:Fwd_GETX_NDB, in_msg.addr, cache_entry, tbe);
+        //     }
         } else if (in_msg.Type == CoherenceRequestType:GETS) {
             if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
                 trigger(Event:L0_Invalidate_Else, in_msg.addr,
@@ -470,6 +504,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     peek(requestNetwork_in, RequestMsg) {
       enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
         assert(is_valid(cache_entry));
+        DPRINTF(RubySlicc, "d_sendDataToRequestor::addr=%x, dest=%d\n"
+                         , address, in_msg.Requestor);
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:DATA;
         out_msg.DataBlk := cache_entry.DataBlk;
@@ -734,6 +770,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   action(u_writeDataFromL2Response, "uresl2", desc="Write data to cache") {
     peek(responseNetwork_in, ResponseMsg) {
       assert(is_valid(cache_entry));
+      DPRINTF(RubySlicc, "u_writeDataFromL2Response::addr=%x, Dirty=%d, data=%s\n"
+                       , address, in_msg.Dirty, in_msg.DataBlk);
       cache_entry.DataBlk := in_msg.DataBlk;
       cache_entry.Dirty := in_msg.Dirty;
     }
@@ -752,6 +790,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   action(q_updateAckCount, "q", desc="Update ack count") {
     peek(responseNetwork_in, ResponseMsg) {
       assert(is_valid(tbe));
+      DPRINTF(RubySlicc, "q_updateAckCount::addr=%x, pendacks=%d, in_msg.ack=%d\n"
+                       , address, tbe.pendingAcks, in_msg.AckCount);
       tbe.pendingAcks := tbe.pendingAcks - in_msg.AckCount;
       APPEND_TRANSITION_COMMENT(in_msg.AckCount);
       APPEND_TRANSITION_COMMENT(" p: ");
@@ -883,7 +923,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     l_popL2RequestQueue;
   }
 
-  transition(EE, Fwd_GETX, I) {
+  transition({EE,SS}, Inv_SD, I) {
+    f_sendDataToL2;
+    ff_deallocateCacheBlock;
+    l_popL2RequestQueue;
+  }
+
+  transition({EE,SS}, Fwd_GETX, I) {
     d_sendDataToRequestor;
     ff_deallocateCacheBlock;
     l_popL2RequestQueue;
@@ -929,7 +975,11 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   transition(M_I, Inv, SINK_WB_ACK) {
-    ft_sendDataToL2_fromTBE;
+    //ft_sendDataToL2_fromTBE;
+    // this is the other upgrade encounter L1 eviction
+    // we allocate cache but do not change state
+    // which MAYBE FAULT!!
+    fi_sendInvAck;
     l_popL2RequestQueue;
   }
 
@@ -1048,6 +1098,15 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     s_deallocateTBE;
     o_popL2ResponseQueue;
     kd_wakeUpDependents;
+  }
+
+  transition(IM, Ack_all) {
+    // IM receives Ack_all means the data
+    // is not received, so that we keep the
+    // IM state and wait data to trigger
+    // Data_all_Acks to swith to M
+    q_updateAckCount;
+    o_popL2ResponseQueue;
   }
 
   transition(SM, {Inv,L0_Invalidate_Else}, SM_IL0) {

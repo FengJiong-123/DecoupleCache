@@ -31,10 +31,12 @@
 // CoherenceRequestType
 enumeration(CoherenceRequestType, desc="...") {
   GETX,      desc="Get eXclusive";
+  //GETX_NO_DB,desc="Get eXclusive without data back to L2";
   UPGRADE,   desc="UPGRADE to exclusive";
   GETS,      desc="Get Shared";
   GET_INSTR, desc="Get Instruction";
   INV,       desc="INValidate";
+  INV_EVC, desc="Invalidate from directory (eviction)";
   PUTX,      desc="Replacement message";
 
   WB_ACK,    desc="Writeback ack";
@@ -43,6 +45,7 @@ enumeration(CoherenceRequestType, desc="...") {
   DMA_WRITE, desc="DMA Write";
 
   EVC, desc="cache eviction";
+  EVC_DIR, desc="directory eviction";
 }
 
 // CoherenceResponseType
@@ -52,11 +55,12 @@ enumeration(CoherenceResponseType, desc="...") {
   DATA_EXCLUSIVE, desc="Data block for L1 cache in M/E state";
   MEMORY_DATA, desc="Data block from / to main memory";
   ACK, desc="Generic invalidate ack";
+  ACK_No_to_Mem, desc="Generic invalidate ack but ont change mem state";
   ACK_Silent, desc="tell memory to silent move M to I";
   WB_ACK, desc="writeback ack";
   UNBLOCK, desc="unblock";
   EXCLUSIVE_UNBLOCK, desc="exclusive unblock";
-  INV, desc="Invalidate from directory";
+  INV, desc="Invalidate from directory (coherence miss)";
 }
 
 // RequestMsg

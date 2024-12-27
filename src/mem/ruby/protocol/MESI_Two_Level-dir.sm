@@ -50,6 +50,7 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
 
     M, AccessPermission:Maybe_Stale, desc="memory copy may be stale, i.e. other modified copies may exist";
     IM, AccessPermission:Busy, desc="Intermediate State I>M";
+    IMI, AccessPermission:Busy, desc="Intermediate State I>M, but encounter silent replacement so turn to I when data back";
     MI, AccessPermission:Busy, desc="Intermediate State M>I";
     M_DRD, AccessPermission:Busy, desc="Intermediate State when there is a dma read";
     M_DRDI, AccessPermission:Busy, desc="Intermediate State when there is a dma read";
@@ -68,6 +69,7 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     DMA_WRITE, desc="A DMA Write memory request";
     CleanReplacement, desc="Clean Replacement in L2 cache";
     CleanReplacement_Silent, desc="Clean Replacement silent in L2 cache";
+    CleanReplacement_Keep_State, desc="Clean Replacement in L2 cache, but keep the state";
   }
 
   // TYPES
@@ -220,9 +222,9 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     if (responseNetwork_in.isReady(clockEdge())) {
       peek(responseNetwork_in, ResponseMsg) {
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "responseL2Network_in::addr=%x State: %s Sender: %s Type: %s Dest: %s\n",
+        DPRINTF(RubySlicc, "responseL2Network_in::addr=%x State: %s Sender: %s Type: %s\n",
                 in_msg.addr, getState(tbe, in_msg.addr),
-                in_msg.Sender, in_msg.Type, in_msg.Destination);
+                in_msg.Sender, in_msg.Type);
 
         assert(in_msg.Destination.isElement(machineID));
         if (in_msg.Type == CoherenceResponseType:MEMORY_DATA) {
@@ -231,6 +233,8 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
           trigger(Event:CleanReplacement, in_msg.addr, TBEs[in_msg.addr]);
         } else if (in_msg.Type == CoherenceResponseType:ACK_Silent) {
           trigger(Event:CleanReplacement_Silent, in_msg.addr, TBEs[in_msg.addr]);
+        } else if (in_msg.Type == CoherenceResponseType:ACK_No_to_Mem) {
+          trigger(Event:CleanReplacement_Keep_State, in_msg.addr, TBEs[in_msg.addr]);
         } else {
           DPRINTF(RubySlicc, "%s\n", in_msg.Type);
           error("Invalid message");
@@ -243,6 +247,9 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
   in_port(memQueue_in, MemoryMsg, responseFromMemory, rank = 2) {
     if (memQueue_in.isReady(clockEdge())) {
       peek(memQueue_in, MemoryMsg) {
+        TBE tbe := TBEs[in_msg.addr];
+        DPRINTF(RubySlicc, "memQueue_in::addr=%x State: %s Type: %s\n",
+                in_msg.addr, getState(tbe, in_msg.addr), in_msg.Type);
         if (in_msg.Type == MemoryRequestType:MEMORY_READ) {
           trigger(Event:Memory_Data, in_msg.addr, TBEs[in_msg.addr]);
         } else if (in_msg.Type == MemoryRequestType:MEMORY_WB) {
@@ -290,6 +297,8 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
   action(aa_sendAck, "aa", desc="Send ack to L2") {
     peek(memQueue_in, MemoryMsg) {
       enqueue(responseNetwork_out, ResponseMsg, to_mem_ctrl_latency) {
+        DPRINTF(RubySlicc, "aa_sendAck::addr=%x, dest=%d\n", address
+                         , in_msg.OriginalRequestorMachId);
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:MEMORY_ACK;
         out_msg.Sender := machineID;
@@ -330,6 +339,7 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
   action(qw_queueMemoryWBRequest, "qw", desc="Queue off-chip writeback request") {
     peek(responseNetwork_in, ResponseMsg) {
       enqueue(memQueue_out, MemoryMsg, to_mem_ctrl_latency) {
+        DPRINTF(RubySlicc, "qw_queueMemoryWBRequest::addr=%x\n", address);
         out_msg.addr := address;
         out_msg.Type := MemoryRequestType:MEMORY_WB;
         out_msg.Sender := in_msg.Sender;
@@ -476,6 +486,12 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     l_popMemQueue;
     kd_wakeUpDependents;
   }
+
+  transition(IMI, Memory_Data, I) {
+    d_sendData;
+    l_popMemQueue;
+    kd_wakeUpDependents;
+  }
 //added by SS
   transition({M,I}, CleanReplacement, I) {
     a_sendAck;
@@ -483,9 +499,21 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     kd_wakeUpDependents;
   }
 
-  transition({M,I,IM}, CleanReplacement_Silent, I) {
+  transition({M,I,IM,MI}, CleanReplacement_Keep_State) {
+    a_sendAck;
     k_popIncomingResponseQueue;
     kd_wakeUpDependents;
+  }
+
+  transition({M,I}, CleanReplacement_Silent, I) {
+    k_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition(IM, CleanReplacement_Silent, IMI) {
+    // swith to state that wait memory_data
+    // but turn to I state
+    k_popIncomingResponseQueue;
   }
 
   transition(MI, CleanReplacement_Silent) {

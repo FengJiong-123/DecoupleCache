@@ -110,8 +110,11 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
 
     L1_PUTX_front,           desc="L1 replacing data, front";
     L1_PUTX_end,             desc="L1 replacing data, end";
+    L1_PUTX_end_toMT,        desc="L1 replacing data, end to MT state";
+    L1_PUTX_end_toSS,        desc="L1 replacing data, end to SS state";
     L1_PUTX_clean,           desc="L1 replacing clean data";
     L1_PUTX_clean_toM,       desc="L1 replacing clean data to M state";
+    L1_PUTX_clean_toNP,      desc="L1 replacing clean data to NP state";
     //L1_PUTX_old,             desc="L1 replacing data, but no longer sharer";
 
     // events initiated by this L2
@@ -130,15 +133,20 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
 
     // M->S data writeback
     WB_Data,                 desc="data from L1";
+    WB_Data_Keep,            desc="data from L1, but keep I_I state";
     WB_Data_clean,           desc="clean data from L1";
     WB_Data_all,             desc="data from L1";
     Ack,                     desc="writeback ack";
     Ack_all,                 desc="writeback ack";
+    Ack_all_DtoMem,          desc="writeback ack, but need to send data to mem";
 
     Unblock,                 desc="Unblock from L1 requestor";
+    Unblock_Keep,            desc="Unblock from L1 requestor, but keep MT_SB state";
     Exclusive_Unblock,       desc="Unblock from L1 requestor";
 
     MEM_Inv,                 desc="Invalidation from directory";
+
+    Pend,                    desc="pend request in event";
   }
 
   // TYPES
@@ -159,7 +167,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     State DirState,          desc="cache state";
     NetDest Sharers,               desc="tracks the L1 shares on-chip";
     MachineID Exclusive,          desc="Exclusive holder of block";
-    //bool toEvict, default="false", desc="entry tends to evict";
+    bool waitEvict, default="false", desc="wait other victim evicts";
   }
 
   // TBE fields
@@ -170,10 +178,12 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     bool Dirty, default="false", desc="Data is Dirty";
     bool cacheToEvict, default="false", desc="directory entry tends to evict";
     bool dirToEvict, default="false", desc="directory entry tends to evict";
+    bool hasSendDataToMem, default="false", desc="send only in t_sendDataToMem";
 
     NetDest L1_GetS_IDs,            desc="Set of the internal processors that want the block in shared state";
     MachineID L1_GetX_ID,          desc="ID of the L1 cache to forward the block to once we get a response";
     int pendingAcks,            desc="number of pending acks for invalidates during writeback";
+    int waitDataNum,            desc="this is only for multi requests hit SS state that need several WB_Data";
   }
 
   structure(TBETable, external="yes") {
@@ -353,12 +363,24 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
   }
 
   int getPendingAcks(TBE tbe) {
+    if (is_invalid(tbe)) {
+      return 0;
+    }
     return tbe.pendingAcks;
   }
 
   bool isDirty(CacheEntry cache_entry) {
-    assert(is_valid(cache_entry));
+    if(is_invalid(cache_entry)) {
+      return false;
+    }
     return cache_entry.Dirty;
+  }
+
+  bool isDirWaitEvict(DirEntry dir_entry) {
+    if(is_invalid(dir_entry)) {
+      return false;
+    }
+    return dir_entry.waitEvict;
   }
 
   // ** OUT_PORTS **
@@ -375,14 +397,22 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         CacheEntry cache_entry := getCacheEntry(in_msg.addr);
         DirEntry   dir_entry   := getDirEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "L1unblockNetwork_in::Addr: %#x State: %s Sender: %s Type: %s\n",
-                in_msg.addr, getState(tbe, cache_entry, in_msg.addr),
-                in_msg.Sender, in_msg.Type);
+        State state := getState(tbe, cache_entry, in_msg.addr);
+        DPRINTF(RubySlicc, "L1unblockNetwork_in::addr=%x State: %s Sender: %s Type: %s\n"
+                         ,in_msg.addr, state, in_msg.Sender, in_msg.Type);
 
         assert(in_msg.Destination.isElement(machineID));
         if (in_msg.Type == CoherenceResponseType:EXCLUSIVE_UNBLOCK) {
           trigger(Event:Exclusive_Unblock, in_msg.addr, cache_entry, tbe);
         } else if (in_msg.Type == CoherenceResponseType:UNBLOCK) {
+          if (state == State:MT_SB && is_valid(tbe)) {
+            assert(tbe.waitDataNum > 0);
+            if (tbe.waitDataNum > 1) {
+              DPRINTF(RubySlicc, "L1unblockNetwork_in::keep MT_SB state\n");
+              tbe.waitDataNum := tbe.waitDataNum - 1;
+              trigger(Event:Unblock_Keep, in_msg.addr, cache_entry, tbe);
+            }
+          }
           trigger(Event:Unblock, in_msg.addr, cache_entry, tbe);
         } else {
           error("unknown unblock message");
@@ -409,14 +439,30 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             assert(in_msg.AckCount < 2);
             // is the directory back invalidation
             if(getPendingAcks(tbe) > 1) {
-              if (in_msg.Type == CoherenceResponseType:DATA) {
+              if (in_msg.Type == CoherenceResponseType:DATA && in_msg.Dirty) {
+                if (getState(tbe, cache_entry, in_msg.addr) == State:I_I && 
+                    isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
+                    // here is the situation that directory eviction
+                    // encounter cache eviction, we deallocate cache
+                    // entry first and set state to I_I. However, the
+                    // directory EV creates back invalidation. Therefore,
+                    // we do not allocate this cache entry again when
+                    // cache is unavailable
+                    // MAYBE FAULT!!
+                  trigger(Event:WB_Data_Keep, in_msg.addr, cache_entry, tbe);
+                }
                 trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
               } else {
                 trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
               }
             } else {
               assert(getPendingAcks(tbe) == 1);
-              if (in_msg.Type == CoherenceResponseType:DATA) {
+              if (in_msg.Type == CoherenceResponseType:DATA && in_msg.Dirty) {
+                if (getState(tbe, cache_entry, in_msg.addr) == State:I_I && 
+                    isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
+                  // MAYBE FAULT!!
+                  trigger(Event:Ack_all_DtoMem, in_msg.addr, cache_entry, tbe);
+                }
                 trigger(Event:WB_Data_all, in_msg.addr, cache_entry, tbe);
               } else {
                 trigger(Event:Ack_all, in_msg.addr, cache_entry, tbe);
@@ -513,15 +559,14 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     if(triggerInPort.isReady(clockEdge())) {
       peek(triggerInPort, RequestMsg) {
         CacheEntry cache_entry := getCacheEntry(in_msg.addr);
-        //DirEntry   dir_entry   := getDirEntry(in_msg.addr);
+        DirEntry   dir_entry   := getDirEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "triggerInPort::addr=%x, dirty=%d State: %s Req: %s Type: %s\n"
-                         , in_msg.addr, isDirty(cache_entry), getState(tbe, cache_entry, in_msg.addr)
-                         , in_msg.Requestor, in_msg.Type);
+        State state := getState(tbe, cache_entry, in_msg.addr);
+        DPRINTF(RubySlicc, "triggerInPort::addr=%x, cache dirty=%d State: %s Req: %s Type: %s\n"
+                         , in_msg.addr, isDirty(cache_entry), state, in_msg.Requestor, in_msg.Type);
 
-        DPRINTF(TraceTrackerLLC, "triggerInPort::addr=%x, dirty=%d State: %s Req: %s Type: %s\n"
-                         , in_msg.addr, isDirty(cache_entry), getState(tbe, cache_entry, in_msg.addr)
-                         , in_msg.Requestor, in_msg.Type);
+        DPRINTF(TraceTrackerLLC, "triggerInPort::addr=%x, cache dirty=%d State: %s Req: %s Type: %s\n"
+                         , in_msg.addr, isDirty(cache_entry), state, in_msg.Requestor, in_msg.Type);
 
         if (in_msg.Type == CoherenceRequestType:EVC) {
           assert(is_valid(cache_entry));
@@ -532,8 +577,35 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
           //   //trigger(Event:L2_Replacement_clean, in_msg.addr, cache_entry, tbe);
           //   assert(false);
           // }
+        } else if (in_msg.Type == CoherenceRequestType:EVC_DIR) {
+          CacheEntry L2cache_entry := getCacheEntry(in_msg.addr);
+          DirEntry dir_victim_entry := getDirEntry(in_msg.addr);
+          TBE tbe_victim := TBEs[in_msg.addr];
+          assert(is_valid(dir_victim_entry));
+          // set to evcit flag
+
+          if (is_invalid(L2cache_entry)) {
+            trigger(Event:SF_Replacement, in_msg.addr, L2cache_entry, TBEs[in_msg.addr]);
+          } else {
+            trigger(Event:SF_Replacement_withC, in_msg.addr, L2cache_entry, TBEs[in_msg.addr]);
+          }
         } else {
           assert(in_msg.Type == CoherenceRequestType:PUTX);
+          assert(in_msg.Dirty);
+          DPRINTF(RubySlicc, "triggerInPort::is PUTX::addr=%x, State: %s Req: %s sharers count=%d\n"
+                           , in_msg.addr, state, in_msg.Requestor);
+          if (state == State:SS || state == State:MT) {
+            assert(is_valid(dir_entry));
+            if (dir_entry.Sharers.count() > 2) {
+              trigger(Event:L1_PUTX_end_toSS, in_msg.addr, cache_entry, tbe);
+            } else if (dir_entry.Sharers.count() == 2) {
+              trigger(Event:L1_PUTX_end_toMT, in_msg.addr, cache_entry, tbe);
+            } else if (dir_entry.Sharers.count() == 1 && state == State:MT &&
+                      !dir_entry.Sharers.isElement(in_msg.Requestor)) {
+              trigger(Event:L1_PUTX_end_toMT, in_msg.addr, cache_entry, tbe);
+            }
+          }
+          // to M state
           trigger(Event:L1_PUTX_end, in_msg.addr, cache_entry, tbe);
         }
       }
@@ -546,14 +618,13 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         CacheEntry cache_entry := getCacheEntry(in_msg.addr);
         DirEntry   dir_entry   := getDirEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        State state := getState(tbe, cache_entry, in_msg.addr);
 
-        DPRINTF(RubySlicc, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s\n",
-                in_msg.addr, getState(tbe, cache_entry, in_msg.addr),
-                in_msg.Requestor, in_msg.Type);
+        DPRINTF(RubySlicc, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s, cache dirty=%d, req dirty=%d\n",
+                in_msg.addr, state, in_msg.Requestor, in_msg.Type, isDirty(cache_entry), in_msg.Dirty);
 
-        DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s\n",
-                in_msg.addr, getState(tbe, cache_entry, in_msg.addr),
-                in_msg.Requestor, in_msg.Type);
+        DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s, cache dirty=%d, req dirty=%d\n",
+                in_msg.addr, state, in_msg.Requestor, in_msg.Type, isDirty(cache_entry), in_msg.Dirty);
 
         assert(machineIDToMachineType(in_msg.Requestor) == MachineType:L1Cache);
         assert(in_msg.Destination.isElement(machineID));
@@ -561,15 +632,22 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         if (is_valid(dir_entry)) {
           // counter
           SF.profileDemandHit();
+          // check wait evict flag
+          if (in_msg.Type == CoherenceRequestType:GETX && isDirWaitEvict(dir_entry)) {
+            trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
+          }
           // The SF contains the block, so proceeded with handling the request
           if (in_msg.Type == CoherenceRequestType:PUTX && !in_msg.Dirty &&
-              getState(tbe, cache_entry, in_msg.addr) == State:SS &&
-              dir_entry.Sharers.count() == 1 &&
-              dir_entry.Sharers.isElement(in_msg.Requestor) &&
-              is_valid(cache_entry)) {
+             (state == State:SS || state == State:MT) &&
+              dir_entry.Sharers.count() == 1 ) {
+            assert(dir_entry.Sharers.isElement(in_msg.Requestor));
             // this is the situation that PUTX is clean data and need
             // to deallocate directory, we let SS state turns to M
-            trigger(Event:L1_PUTX_clean_toM, in_msg.addr, cache_entry, tbe);
+            if (is_valid(cache_entry)) {
+              trigger(Event:L1_PUTX_clean_toM, in_msg.addr, cache_entry, tbe);
+            } else {
+              trigger(Event:L1_PUTX_clean_toNP, in_msg.addr, cache_entry, tbe);
+            }
           }
           trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
                                                 in_msg.Requestor, dir_entry, in_msg.Dirty),
@@ -598,22 +676,24 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             // set to evcit flag
             // dir_victim_entry.toEvict := true;
             DPRINTF(RubySlicc, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
-                             , in_msg.addr, getState(tbe, cache_entry, in_msg.addr)
-                             , victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
+                             , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
 
             DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
-                             , in_msg.addr, getState(tbe, cache_entry, in_msg.addr)
-                             , victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
+                             , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
 
             stall_and_wait(L1RequestL2Network_in, victim);
             // counter
             SF.profileEvictions();
             // savePendingAddr
             SF.savePendingAddr(in_msg.addr);
-            if (is_invalid(L2cache_entry)) {
-              trigger(Event:SF_Replacement, victim, L2cache_entry, TBEs[victim]);
-            } else {
-              trigger(Event:SF_Replacement_withC, victim, L2cache_entry, TBEs[victim]);
+            // if (is_invalid(L2cache_entry)) {
+            //   trigger(Event:SF_Replacement, victim, L2cache_entry, TBEs[victim]);
+            // } else {
+            //   trigger(Event:SF_Replacement_withC, victim, L2cache_entry, TBEs[victim]);
+            // }
+            enqueue(triggerOutPort, RequestMsg, 0) {
+              out_msg.addr := victim;
+              out_msg.Type := CoherenceRequestType:EVC_DIR;
             }
           }
         }

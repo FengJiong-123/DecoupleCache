@@ -592,8 +592,8 @@ LSQUnit::executeLoad(const DynInstPtr &inst)
     // Execute a specific load.
     Fault load_fault = NoFault;
 
-    DPRINTF(LSQUnit, "Executing load PC %s, [sn:%lli]\n",
-            inst->pcState(), inst->seqNum);
+    DPRINTF(LSQUnit, "Executing load PC %s, [sn:%lli], phyAddr=%x\n",
+            inst->pcState(), inst->seqNum, inst->physEffAddr);
 
     assert(!inst->isSquashed());
 
@@ -661,8 +661,8 @@ LSQUnit::executeStore(const DynInstPtr &store_inst)
 
     ssize_t store_idx = store_inst->sqIdx;
 
-    DPRINTF(LSQUnit, "Executing store PC %s [sn:%lli]\n",
-            store_inst->pcState(), store_inst->seqNum);
+    DPRINTF(LSQUnit, "Executing store PC %s [sn:%lli], store_idx=%d\n",
+            store_inst->pcState(), store_inst->seqNum, store_idx);
 
     assert(!store_inst->isSquashed());
 
@@ -684,8 +684,12 @@ LSQUnit::executeStore(const DynInstPtr &store_inst)
     }
 
     if (storeQueue[store_idx].size() == 0) {
-        DPRINTF(LSQUnit,"Fault on Store PC %s, [sn:%lli], Size = 0\n",
-                store_inst->pcState(), store_inst->seqNum);
+        DPRINTF(LSQUnit,"Fault on Store PC %s, [sn:%lli], Size = 0, has request=%d\n",
+                store_inst->pcState(), store_inst->seqNum, storeQueue[store_idx].hasRequest());
+        if(storeQueue[store_idx].hasRequest()) {
+            DPRINTF(LSQUnit,"PC %s, [sn:%lli], has request, addr=%x\n",
+                store_inst->pcState(), store_inst->seqNum, storeQueue[store_idx].request()->req()->getPaddr());
+        }
 
         if (store_inst->isAtomic()) {
             // If the instruction faulted, then we need to send it along

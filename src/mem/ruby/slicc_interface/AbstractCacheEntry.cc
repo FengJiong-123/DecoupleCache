@@ -58,6 +58,7 @@ AbstractCacheEntry::AbstractCacheEntry() : ReplaceableEntry()
     m_htmInReadSet = false;
     m_htmInWriteSet = false;
     m_complete = false;
+    m_waitEvict = false;
 }
 
 AbstractCacheEntry::~AbstractCacheEntry()

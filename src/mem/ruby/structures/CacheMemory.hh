@@ -94,6 +94,8 @@ class CacheMemory : public SimObject
     //   b) an unused line in the same cache "way"
     bool cacheAvail(Addr address) const;
 
+    bool cacheBlock(Addr address);
+
     // Returns a NULL entry that acts as a placeholder for invalid lines
     AbstractCacheEntry*
     getNullEntry() const
@@ -146,6 +148,7 @@ class CacheMemory : public SimObject
     // functions for set and remove pending address
     void savePendingAddr(Addr address);
     void removePendingAddr(Addr address);
+    bool isPendingAddr(Addr address);
 
     // Print cache contents
     void print(std::ostream& out) const;

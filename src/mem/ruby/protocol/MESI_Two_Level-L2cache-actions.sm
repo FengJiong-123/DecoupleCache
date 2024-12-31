@@ -958,6 +958,9 @@ transition(MT, Pend){
     zz_stallAndWaitL1RequestQueue;
 }
 
+transition({NP,M,S_I,I_I}, Pop_ReqIn){
+}
+
 transition({MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
            {SF_Replacement_withC, SF_Replacement}){
     zzt_stallAndWaitTriggerQueue;
@@ -1017,6 +1020,13 @@ transition({SS,MT}, L1_PUTX_clean_toM, M) {
     kd_wakeUpDependents;
 }
 
+transition({SS,MT}, L1_PUTX_clean_pop) {
+    kk_removeRequestSharer;
+    t_sendWBAck;
+    jj_popL1RequestQueue;
+    kd_wakeUpDependents;
+}
+
 transition({SS,MT}, L1_PUTX_clean_toNP, NP) {
     kk_removeRequestSharer;
     t_sendWBAck;
@@ -1049,6 +1059,11 @@ transition({M,MT,SS}, SF_Replacement, I_I) {
     // Once cache is not avail
     // we do not pend current
     // directory eviction
+    jjt_popTriggerPort;
+}
+
+transition({S_I,I_I}, SF_FakeReplacement) {
+    // directory has been evicted once
     jjt_popTriggerPort;
 }
 

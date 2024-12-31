@@ -106,6 +106,7 @@ class AbstractCacheEntry : public ReplaceableEntry
     // Required for implementing LL/SC operations.
     int m_locked;
     bool m_complete;
+    bool m_waitEvict;
 
     AccessPermission m_Permission; // Access permission for this
                                    // block, required by CacheMemory

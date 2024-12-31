@@ -115,6 +115,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     L1_PUTX_clean,           desc="L1 replacing clean data";
     L1_PUTX_clean_toM,       desc="L1 replacing clean data to M state";
     L1_PUTX_clean_toNP,      desc="L1 replacing clean data to NP state";
+    L1_PUTX_clean_pop,       desc="L1 replacing clean data, only pop queue";
     //L1_PUTX_old,             desc="L1 replacing data, but no longer sharer";
 
     // events initiated by this L2
@@ -124,6 +125,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     // SF eviction event
     SF_Replacement,          desc="SF Replacement", format="!r";
     SF_Replacement_withC,    desc="SF Replacement with cache", format="!r";
+    SF_FakeReplacement,      desc="SF Replacement twice", format="!r";
 
     // events from memory controller
     Mem_Data,                desc="data from memory", format="!r";
@@ -147,6 +149,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     MEM_Inv,                 desc="Invalidation from directory";
 
     Pend,                    desc="pend request in event";
+    Pop_ReqIn,               desc="event to pop request in port";
   }
 
   // TYPES
@@ -581,7 +584,13 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
           CacheEntry L2cache_entry := getCacheEntry(in_msg.addr);
           DirEntry dir_victim_entry := getDirEntry(in_msg.addr);
           TBE tbe_victim := TBEs[in_msg.addr];
+          // it is possible that dir has been evicted twice
           assert(is_valid(dir_victim_entry));
+          // if(is_invalid(dir_victim_entry)) {
+          //   assert(is_valid(tbe));
+          //   assert(isDirToEvict(tbe));
+          //   trigger(Event:SF_FakeReplacement, in_msg.addr, L2cache_entry, TBEs[in_msg.addr]);
+          // }
           // set to evcit flag
 
           if (is_invalid(L2cache_entry)) {
@@ -640,9 +649,15 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
           if (in_msg.Type == CoherenceRequestType:PUTX && !in_msg.Dirty &&
              (state == State:SS || state == State:MT) &&
               dir_entry.Sharers.count() == 1 ) {
-            assert(dir_entry.Sharers.isElement(in_msg.Requestor));
+            // it is possible that putx stall by upgrade, and the sharers
+            // has been removed, so that delete assert check and silent
+            // move to original state
+            // assert(dir_entry.Sharers.isElement(in_msg.Requestor));
+            if (!dir_entry.Sharers.isElement(in_msg.Requestor)) {
+              trigger(Event:L1_PUTX_clean_pop, in_msg.addr, cache_entry, tbe);
+            }
             // this is the situation that PUTX is clean data and need
-            // to deallocate directory, we let SS state turns to M
+            // to deallocate directory, we let SS state turns to M or NP
             if (is_valid(cache_entry)) {
               trigger(Event:L1_PUTX_clean_toM, in_msg.addr, cache_entry, tbe);
             } else {
@@ -672,6 +687,15 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             CacheEntry L2cache_entry := getCacheEntry(victim);
             DirEntry dir_victim_entry := getDirEntry(victim);
             TBE tbe_victim := TBEs[victim];
+            if (!SF.isTagPresent(victim) || SF.cacheBlock(in_msg.addr)) {
+              // this means the current SF set has been pending full
+              // so that is not available
+              DPRINTF(RubySlicc, "L1RequestL2Network_in::directory block::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
+                               , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
+              //assert(SF.isPendingAddr(victim));
+              stall_and_wait(L1RequestL2Network_in, victim);
+              trigger(Event:Pop_ReqIn, in_msg.addr, cache_entry, tbe);
+            }
             assert(is_valid(dir_victim_entry));
             // set to evcit flag
             // dir_victim_entry.toEvict := true;
@@ -695,6 +719,8 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               out_msg.addr := victim;
               out_msg.Type := CoherenceRequestType:EVC_DIR;
             }
+            // set MRU to prevent this address being evicted twice
+            SF.setMRU(victim);
           }
         }
       }

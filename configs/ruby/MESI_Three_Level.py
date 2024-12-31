@@ -145,11 +145,12 @@ def create_system(
                 is_icache=True,
                 start_index_bit=block_size_bits,
                 replacement_policy=LRURP(),
+                new_replacement_policy=0,
             )
-            print(l0i_cache.size, l0i_cache.assoc, l0i_cache.replacement_policy
-                , l0i_cache.start_index_bit, l0i_cache.is_icache, l0i_cache.block_size
-                , l0i_cache.dataArrayBanks, l0i_cache.tagArrayBanks, l0i_cache.dataAccessLatency
-                , l0i_cache.tagAccessLatency, l0i_cache.resourceStalls, l0i_cache.ruby_system)
+            # print(l0i_cache.size, l0i_cache.assoc, l0i_cache.replacement_policy
+            #     , l0i_cache.start_index_bit, l0i_cache.is_icache, l0i_cache.block_size
+            #     , l0i_cache.dataArrayBanks, l0i_cache.tagArrayBanks, l0i_cache.dataAccessLatency
+            #     , l0i_cache.tagAccessLatency, l0i_cache.resourceStalls, l0i_cache.ruby_system)
 
             l0d_cache = L0Cache(
                 size=options.l0d_size,
@@ -157,6 +158,7 @@ def create_system(
                 is_icache=False,
                 start_index_bit=block_size_bits,
                 #replacement_policy=LRURP(),
+                new_replacement_policy=0,
             )
 
             clk_domain = cpus[i].clk_domain
@@ -197,6 +199,7 @@ def create_system(
                 assoc=options.l1d_assoc,
                 start_index_bit=block_size_bits,
                 is_icache=False,
+                new_replacement_policy=0,
             )
 
             l1_cntrl = L1Cache_Controller(
@@ -250,12 +253,14 @@ def create_system(
                 size=options.l2_size,
                 assoc=options.l2_assoc,
                 start_index_bit=l2_index_start,
+                new_replacement_policy=0,
             )
 
             SF = L2Cache(
                 size=options.SF_size,
                 assoc=options.SF_assoc,
                 start_index_bit=l2_index_start,
+                new_replacement_policy=1,
             )
 
             l2_cntrl = L2Cache_Controller(

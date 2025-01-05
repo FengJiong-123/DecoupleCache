@@ -471,15 +471,15 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
 
   // TRANSITIONS
 
-  transition(I, Fetch, IM) {
+  transition({I,M}, Fetch, IM) {
     qf_queueMemoryFetchRequest;
     j_popIncomingRequestQueue;
   }
 
-  transition(M, Fetch) {
-    inv_sendCacheInvalidate;
-    z_stallAndWaitRequest;
-  }
+  // transition(M, Fetch) {
+  //   inv_sendCacheInvalidate;
+  //   z_stallAndWaitRequest;
+  // }
 
   transition(IM, Memory_Data, M) {
     d_sendData;

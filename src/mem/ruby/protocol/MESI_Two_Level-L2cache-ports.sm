@@ -512,51 +512,6 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     }  // if not ready, do nothing
   }
 
-  // L1 Request
-  // in_port(L1RequestL2Network_in, RequestMsg, L1RequestToL2Cache, rank = 0) {
-  //   if(L1RequestL2Network_in.isReady(clockEdge()) && TBEs.areNSlotsAvailable(2,clockEdge())) {
-  //     peek(L1RequestL2Network_in,  RequestMsg) {
-  //       CacheEntry cache_entry := getCacheEntry(in_msg.addr);
-  //       DirEntry   dir_entry   := getDirEntry(in_msg.addr);
-  //       TBE tbe := TBEs[in_msg.addr];
-
-  //       DPRINTF(RubySlicc, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s Dest: %s\n",
-  //               in_msg.addr, getState(tbe, cache_entry, in_msg.addr),
-  //               in_msg.Requestor, in_msg.Type, in_msg.Destination);
-
-  //       assert(machineIDToMachineType(in_msg.Requestor) == MachineType:L1Cache);
-  //       assert(in_msg.Destination.isElement(machineID));
-
-  //       if (is_valid(cache_entry)) {
-  //         // The L2 contains the block, so proceeded with handling the request
-  //         trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
-  //                                               in_msg.Requestor, dir_entry),
-  //                 in_msg.addr, cache_entry, tbe);
-  //       } else {
-  //         if (L2cache.cacheAvail(in_msg.addr)) {
-  //           // L2 does't have the line, but we have space for it in the L2
-  //           trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
-  //                                                 in_msg.Requestor, dir_entry),
-  //                   in_msg.addr, cache_entry, tbe);
-  //         } else {
-  //           // No room in the L2, so we need to make room before handling the request
-  //           Addr victim := L2cache.cacheProbe(in_msg.addr);
-  //           CacheEntry L2cache_entry := getCacheEntry(victim);
-  //           TBE tbe_victim := TBEs[victim];
-  //           DPRINTF(RubySlicc, "L1RequestL2Network_in::trigger replacement::addr=%x, state=%d, victim=%x, state=%d\n"
-  //                            , in_msg.addr, getState(tbe, cache_entry, in_msg.addr), victim
-  //                            , getState(tbe_victim, L2cache_entry, victim));
-  //           if (isDirty(L2cache_entry)) {
-  //             trigger(Event:L2_Replacement, victim, L2cache_entry, TBEs[victim]);
-  //           } else {
-  //             trigger(Event:L2_Replacement_clean,
-  //                     victim, L2cache_entry, TBEs[victim]);
-  //           }
-  //         }
-  //       }
-  //     }
-  //   }
-  // }
   // cache replacement port
   in_port(triggerInPort, RequestMsg, TriggerPort, rank=1) {
     if(triggerInPort.isReady(clockEdge())) {
@@ -576,22 +531,13 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
           // counter
           L2cache.profileEvictions();
           trigger(Event:L2_Replacement, in_msg.addr, cache_entry, tbe);
-          // } else {
-          //   //trigger(Event:L2_Replacement_clean, in_msg.addr, cache_entry, tbe);
-          //   assert(false);
-          // }
+
         } else if (in_msg.Type == CoherenceRequestType:EVC_DIR) {
           CacheEntry L2cache_entry := getCacheEntry(in_msg.addr);
           DirEntry dir_victim_entry := getDirEntry(in_msg.addr);
           TBE tbe_victim := TBEs[in_msg.addr];
           // it is possible that dir has been evicted twice
           assert(is_valid(dir_victim_entry));
-          // if(is_invalid(dir_victim_entry)) {
-          //   assert(is_valid(tbe));
-          //   assert(isDirToEvict(tbe));
-          //   trigger(Event:SF_FakeReplacement, in_msg.addr, L2cache_entry, TBEs[in_msg.addr]);
-          // }
-          // set to evcit flag
 
           if (is_invalid(L2cache_entry)) {
             trigger(Event:SF_Replacement, in_msg.addr, L2cache_entry, TBEs[in_msg.addr]);
@@ -692,13 +638,11 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               // so that is not available
               DPRINTF(RubySlicc, "L1RequestL2Network_in::directory block::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
                                , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
-              //assert(SF.isPendingAddr(victim));
               stall_and_wait(L1RequestL2Network_in, victim);
               trigger(Event:Pop_ReqIn, in_msg.addr, cache_entry, tbe);
             }
             assert(is_valid(dir_victim_entry));
             // set to evcit flag
-            // dir_victim_entry.toEvict := true;
             DPRINTF(RubySlicc, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
                              , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
 
@@ -710,11 +654,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             SF.profileEvictions();
             // savePendingAddr
             SF.savePendingAddr(in_msg.addr);
-            // if (is_invalid(L2cache_entry)) {
-            //   trigger(Event:SF_Replacement, victim, L2cache_entry, TBEs[victim]);
-            // } else {
-            //   trigger(Event:SF_Replacement_withC, victim, L2cache_entry, TBEs[victim]);
-            // }
+            // insert to trigger port
             enqueue(triggerOutPort, RequestMsg, 0) {
               out_msg.addr := victim;
               out_msg.Type := CoherenceRequestType:EVC_DIR;
@@ -736,8 +676,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         return (in_msg.Type == CoherenceRequestType:GETS ||
                 in_msg.Type == CoherenceRequestType:GET_INSTR) &&
                (state == State:MT || state == State:SS || state == State:ISS ||
-                state == State:IS); //&&
-               //!dir_entry.Sharers.isElement(in_msg.Requestor);
+                state == State:IS);
       }
     }
     return false;

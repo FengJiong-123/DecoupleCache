@@ -220,6 +220,7 @@ structure (DirectoryMemory, external = "yes") {
 
 structure (CacheMemory, external = "yes") {
   bool cacheAvail(Addr);
+  bool cacheFullbuthasPend(Addr);
   Addr cacheProbe(Addr);
   AbstractCacheEntry getNullEntry();
   AbstractCacheEntry allocate(Addr, AbstractCacheEntry);
@@ -253,6 +254,8 @@ structure (CacheMemory, external = "yes") {
   void profilePrefetchHit();
   void profilePrefetchMiss();
   void profileEvictions();
+  void profileRemainedEntry(Addr);
+  void profileSharersNum(int);
 }
 
 structure (WireBuffer, inport="yes", outport="yes", external = "yes") {

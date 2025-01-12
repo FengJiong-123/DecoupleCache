@@ -525,6 +525,11 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     k_popIncomingResponseQueue;
   }
 
+  transition(MI, Data) {
+    //qw_queueMemoryWBRequest;
+    k_popIncomingResponseQueue;
+  }
+
   transition(MI, Memory_Ack, I) {
     aa_sendAck;
     l_popMemQueue;
@@ -559,7 +564,11 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
     kd_wakeUpDependents;
   }
 
-  transition({ID, ID_W, M_DRDI, M_DWRI, IM, MI}, {Fetch, Data} ) {
+  transition({ID, ID_W, M_DRDI, M_DWRI, IM}, {Fetch, Data} ) {
+    z_stallAndWaitRequest;
+  }
+
+  transition(MI, Fetch) {
     z_stallAndWaitRequest;
   }
 

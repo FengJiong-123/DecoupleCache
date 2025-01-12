@@ -93,6 +93,7 @@ class CacheMemory : public SimObject
     //   a) a tag match on this address or there is
     //   b) an unused line in the same cache "way"
     bool cacheAvail(Addr address) const;
+    bool cacheFullbuthasPend(Addr address);
 
     bool cacheBlock(Addr address);
 
@@ -256,6 +257,21 @@ class CacheMemory : public SimObject
           statistics::Vector m_accessModeType;
 
           statistics::Scalar m_evictions;
+
+          // conters for cache way remained
+          // when dir evict
+          statistics::Scalar m_remained_entry_0;
+          statistics::Scalar m_remained_entry_1;
+          statistics::Scalar m_remained_entry_2;
+          statistics::Scalar m_remained_entry_3_8;
+          statistics::Scalar m_remained_entry_8_;
+
+          // counters for dir sharers' num if evict
+          statistics::Scalar m_sharer_num_1;
+          statistics::Scalar m_sharer_num_2;
+          statistics::Scalar m_sharer_num_3;
+          statistics::Scalar m_sharer_num_4;
+          statistics::Scalar m_sharer_num_4_;
       } cacheMemoryStats;
 
     public:
@@ -266,6 +282,8 @@ class CacheMemory : public SimObject
       void profilePrefetchHit();
       void profilePrefetchMiss();
       void profileEvictions();
+      void profileRemainedEntry(Addr address);
+      void profileSharersNum(int num);
 };
 
 std::ostream& operator<<(std::ostream& out, const CacheMemory& obj);

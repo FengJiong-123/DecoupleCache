@@ -105,6 +105,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     // events initiated by the local L1s
     L1_GET_INSTR,            desc="a L1I GET INSTR request for a block maped to us";
     L1_GETS,                 desc="a L1D GETS request for a block maped to us";
+    L1_GETS_withC,           desc="GETS request hit cache entry";
     L1_GETX,                 desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE,              desc="a L1D GETX request for a block maped to us";
 
@@ -340,10 +341,17 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
   }
 
   Event L1Cache_request_type_to_event(CoherenceRequestType type, Addr addr,
-                                      MachineID requestor, DirEntry dir_entry, bool dirty) {
+                                      MachineID requestor, DirEntry dir_entry, bool dirty,
+                                      State state, CacheEntry cache_entry) {
     if(type == CoherenceRequestType:GETS) {
+      if (state == State:SS && is_valid(cache_entry)) {
+        return Event:L1_GETS_withC;
+      }
       return Event:L1_GETS;
     } else if(type == CoherenceRequestType:GET_INSTR) {
+      if (state == State:SS && is_valid(cache_entry)) {
+        return Event:L1_GETS_withC;
+      }
       return Event:L1_GET_INSTR;
     } else if (type == CoherenceRequestType:GETX) {
       return Event:L1_GETX;
@@ -413,6 +421,8 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             if (tbe.waitDataNum > 1) {
               DPRINTF(RubySlicc, "L1unblockNetwork_in::keep MT_SB state\n");
               tbe.waitDataNum := tbe.waitDataNum - 1;
+              assert(false); // disable waitDataNum because SS cannot share data 
+                             // to two requestors at the same time
               trigger(Event:Unblock_Keep, in_msg.addr, cache_entry, tbe);
             }
           }
@@ -528,8 +538,6 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
 
         if (in_msg.Type == CoherenceRequestType:EVC) {
           assert(is_valid(cache_entry));
-          // counter
-          L2cache.profileEvictions();
           trigger(Event:L2_Replacement, in_msg.addr, cache_entry, tbe);
 
         } else if (in_msg.Type == CoherenceRequestType:EVC_DIR) {
@@ -611,22 +619,35 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             }
           }
           trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
-                                                in_msg.Requestor, dir_entry, in_msg.Dirty),
+                                                in_msg.Requestor, dir_entry, in_msg.Dirty,
+                                                state, cache_entry),
                   in_msg.addr, cache_entry, tbe);
         } else {
           if (SF.cacheAvail(in_msg.addr)) {
+            // it is possible that the address has been stalled
+            // by the other request, the cacheavail checks just hit
+            // the pending address, we need to stall it again
+            //if (L1RequestL2Network_in.hasStalledMsg(in_msg.addr) && SF.cacheFullbuthasPend(in_msg.addr)) {
+            if (SF.cacheFullbuthasPend(in_msg.addr) && 
+               (state == State:M || state == State:NP)) {
+              DPRINTF(RubySlicc, "L1RequestL2Network_in::directory has stall::addr=%x, state=%d\n"
+                               , in_msg.addr, state);
+              trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
+            }
             // counter
             SF.profileDemandMiss();
             // SF does't have the line, but we have space for it in the SF
             trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
-                                                  in_msg.Requestor, dir_entry, in_msg.Dirty),
+                                                  in_msg.Requestor, dir_entry, in_msg.Dirty,
+                                                  state, cache_entry),
                     in_msg.addr, cache_entry, tbe);
           } else {
             // No room in the L2, so we need to make room before handling the request
             // but PUTX doesnot need to allocate directory
             if (in_msg.Type == CoherenceRequestType:PUTX) {
               trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
-                                                    in_msg.Requestor, dir_entry, in_msg.Dirty),
+                                                    in_msg.Requestor, dir_entry, in_msg.Dirty,
+                                                    state, cache_entry),
                       in_msg.addr, cache_entry, tbe);
             }
             Addr victim := SF.cacheProbe(in_msg.addr);
@@ -650,8 +671,6 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                              , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
 
             stall_and_wait(L1RequestL2Network_in, victim);
-            // counter
-            SF.profileEvictions();
             // savePendingAddr
             SF.savePendingAddr(in_msg.addr);
             // insert to trigger port

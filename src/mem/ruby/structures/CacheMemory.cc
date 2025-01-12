@@ -308,6 +308,28 @@ CacheMemory::cacheAvail(Addr address) const
 }
 
 bool
+CacheMemory::cacheFullbuthasPend(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "cacheFullbuthasPend::addr=%x, set=%x, pending size=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size());
+    // cache full?
+    for (int i = 0; i < m_cache_assoc; i++) {
+        AbstractCacheEntry* entry = m_cache[cacheSet][i];
+        if (entry == NULL) {
+            return false;
+        }
+    }
+    // pending?
+    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+        if ((*it) == address) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
 CacheMemory::cacheBlock(Addr address) {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
@@ -441,6 +463,7 @@ CacheMemory::cacheProbe(Addr address) const
         assert(victim_pos < m_cache_assoc);
         assert(m_cache[cacheSet][victim_pos] != NULL);
         assert(m_cache[cacheSet][victim_pos]->getLastAccess() < curTick() + 1);
+        m_cache[cacheSet][victim_pos]->m_waitEvict = true;
         return m_cache[cacheSet][victim_pos]->m_Address;
 
     } else if (m_new_replacement == 1) {
@@ -764,7 +787,17 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
       ADD_STAT(m_prefetch_accesses, "Number of cache prefetch accesses",
                m_prefetch_hits + m_prefetch_misses),
       ADD_STAT(m_accessModeType, ""),
-      ADD_STAT(m_evictions, "Number of evictions")
+      ADD_STAT(m_evictions, "Number of evictions"),
+      ADD_STAT(m_remained_entry_0, "remained entry is 0"),
+      ADD_STAT(m_remained_entry_1, "remained entry is 1"),
+      ADD_STAT(m_remained_entry_2, "remained entry is 2"),
+      ADD_STAT(m_remained_entry_3_8, "remained entry is 3 to 8"),
+      ADD_STAT(m_remained_entry_8_, "remained entry is over 8"),
+      ADD_STAT(m_sharer_num_1, "evict entry has 1 sharer"),
+      ADD_STAT(m_sharer_num_2, "evict entry has 2 sharers"),
+      ADD_STAT(m_sharer_num_3, "evict entry has 3 sharers"),
+      ADD_STAT(m_sharer_num_4, "evict entry has 4 sharers"),
+      ADD_STAT(m_sharer_num_4_, "evict entry has over 4 sharers")
 {
     numDataArrayReads
         .flags(statistics::nozero);
@@ -1015,6 +1048,54 @@ void
 CacheMemory::profileEvictions()
 {
     cacheMemoryStats.m_evictions++;
+}
+
+void
+CacheMemory::profileRemainedEntry(Addr address)
+{
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
+
+    int set_unused_line = 0;
+    for (int i = 0; i < m_cache_assoc; i++) {
+        AbstractCacheEntry* entry = m_cache[cacheSet][i];
+        if (entry == NULL) {
+            set_unused_line ++;
+        } else if (entry->m_Permission == AccessPermission_NotPresent ||
+                   entry->m_waitEvict) {
+            set_unused_line ++;
+        }
+    }
+    assert(set_unused_line <= m_cache_assoc);
+    
+    if (set_unused_line <= m_set_pending_addr[cacheSet].size()) {
+        cacheMemoryStats.m_remained_entry_0 ++;
+    } else if ((set_unused_line - m_set_pending_addr[cacheSet].size()) == 1) {
+        cacheMemoryStats.m_remained_entry_1 ++;
+    } else if ((set_unused_line - m_set_pending_addr[cacheSet].size()) == 2) {
+        cacheMemoryStats.m_remained_entry_2 ++;
+    } else if ((set_unused_line - m_set_pending_addr[cacheSet].size()) > 8) {
+        cacheMemoryStats.m_remained_entry_8_ ++;
+    } else {
+        cacheMemoryStats.m_remained_entry_3_8 ++;
+    }
+}
+
+void
+CacheMemory::profileSharersNum(int num) {
+    assert(num > 0);
+    if (num == 1) {
+        cacheMemoryStats.m_sharer_num_1 ++;
+    } else if (num == 2) {
+        cacheMemoryStats.m_sharer_num_2 ++;
+    } else if (num == 3) {
+        cacheMemoryStats.m_sharer_num_3 ++;
+    } else if (num == 4) {
+        cacheMemoryStats.m_sharer_num_4 ++;
+    } else {
+        cacheMemoryStats.m_sharer_num_4_ ++;
+    }
 }
 
 } // namespace ruby

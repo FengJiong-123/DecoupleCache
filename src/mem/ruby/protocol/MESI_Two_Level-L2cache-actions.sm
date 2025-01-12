@@ -76,6 +76,10 @@ action(c_exclusiveReplacement, "c", desc="Send data to memory") {
             isCacheEvict := (in_msg.Type == CoherenceRequestType:EVC);
         }
     }
+    //counter
+    if (isCacheEvict) {
+        L2cache.profileEvictions();
+    }
     DPRINTF(RubySlicc, "c_exclusiveReplacement::addr=%x, dir valid=%d, dirty=%d, isCacheEvict=%d, data=%s\n"
                      , address, is_valid(dir_entry), cache_entry.Dirty, isCacheEvict, cache_entry.DataBlk);
     enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
@@ -318,6 +322,10 @@ action(f_sendInvToSharers, "f", desc="invalidate sharers for L2 replacement") {
         out_msg.Requestor := machineID;
         out_msg.Destination := dir_entry.Sharers;
         out_msg.MessageSize := MessageSizeType:Request_Control;
+        // counter
+        SF.profileEvictions();
+        SF.profileSharersNum(dir_entry.Sharers.count());
+        L2cache.profileRemainedEntry(address);
     }
 }
 
@@ -549,6 +557,8 @@ action(c_checkCache, "ccc", desc="Check cache can be allocate before back invali
         // save cache line for incoming request
         L2cache_entry.aheadAllocate := true;
         L2cache_entry.aheadAddr := address;
+        // set MRU to stop replacement twice
+        L2cache.setMRU(victim);
 
     } else if (evict_need_allocate_cache || request_need_allocate_cache) {
         // still need save pending address
@@ -659,11 +669,11 @@ action(t_sendWBAck, "t", desc="Send writeback ACK") {
 }
 
 action(tt_sendSilentToMem, "ttm", desc="Send ACK_Silent to mem") {
-    enqueue(responseL2Network_out, ResponseMsg, 1) {
-        assert(is_valid(tbe));
-        DPRINTF(RubySlicc, "tt_sendSilentToMem::addr=%d, hasSendDataToMem=%d\n"
-                         , address, tbe.hasSendDataToMem);
-        if(!tbe.hasSendDataToMem) {
+    assert(is_valid(tbe));
+    DPRINTF(RubySlicc, "tt_sendSilentToMem::addr=%x, hasSendDataToMem=%d\n"
+                     , address, tbe.hasSendDataToMem);
+    if(!tbe.hasSendDataToMem) {
+        enqueue(responseL2Network_out, ResponseMsg, 1) {
             out_msg.addr := address;
             out_msg.Type := CoherenceResponseType:ACK_Silent;
             // ACK_Silent is only used here
@@ -678,11 +688,13 @@ action(tt_sendSilentToMem, "ttm", desc="Send ACK_Silent to mem") {
 
 action(t_sendDataToMem, "tm", desc="Send data to mem when cache is unavail") {
     peek(responseL2Network_in, ResponseMsg) {
-        enqueue(responseL2Network_out, ResponseMsg, l2_request_latency) {
-            assert(in_msg.Dirty);
-            assert(is_valid(tbe));
-            if(!tbe.hasSendDataToMem) {
-                tbe.hasSendDataToMem := true;
+        assert(in_msg.Dirty);
+        assert(is_valid(tbe));
+        DPRINTF(RubySlicc, "t_sendDataToMem::addr=%x, hasSendDataToMem=%d\n"
+                         , address, tbe.hasSendDataToMem);
+        if(!tbe.hasSendDataToMem) {
+            tbe.hasSendDataToMem := true;
+            enqueue(responseL2Network_out, ResponseMsg, l2_request_latency) {
                 out_msg.addr := address;
                 out_msg.Type := CoherenceResponseType:MEMORY_DATA;
                 out_msg.Sender := machineID;
@@ -869,11 +881,11 @@ transition({M_I, MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB
     zz_stallAndWaitL1RequestQueue;
 }
 
-transition(MT, Pend){
+transition({MT,M,NP}, Pend){
     zz_stallAndWaitL1RequestQueue;
 }
 
-transition({NP,M,S_I,I_I}, Pop_ReqIn){
+transition({NP,M,M_I,S_I,I_I}, Pop_ReqIn){
 }
 
 transition({MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
@@ -1147,7 +1159,7 @@ transition(IM, {L1_GETX, L1_GETS, L1_GET_INSTR}) {
 }
 
 // transitions from SS
-transition(SS, {L1_GETS, L1_GET_INSTR}) {
+transition(SS, {L1_GETS, L1_GET_INSTR}, MT_IIB) {
     i_allocateTBE;
     ds_sendSharedDataToRequestor;
     nn_addSharer;
@@ -1157,6 +1169,14 @@ transition(SS, {L1_GETS, L1_GET_INSTR}) {
     jj_popL1RequestQueue;
 }
 
+transition(SS, L1_GETS_withC) {
+    i_allocateTBE;
+    ds_sendSharedDataToRequestor;
+    nn_addSharer;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+}
 
 transition(SS, L1_GETX, SS_MB) {
     d_sendDataToRequestor;
@@ -1290,7 +1310,7 @@ transition(M_I, Mem_Ack, NP) {
     kd_wakeUpDependents;
 }
 
-transition({S_I,I_I,NP,M}, Mem_Ack) {
+transition({S_I,I_I,NP,M,MT,MT_MB}, Mem_Ack) {
     // this is for cache eviction but
     // encouters SF eviction
     o_popIncomingResponseQueue;

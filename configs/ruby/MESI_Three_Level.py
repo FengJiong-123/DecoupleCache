@@ -254,7 +254,7 @@ def create_system(
                 size=options.l2_size,
                 assoc=options.l2_assoc,
                 start_index_bit=l2_index_start,
-                new_replacement_policy=0,
+                new_replacement_policy=1,
             )
 
             SF = L2Cache(

@@ -50,6 +50,7 @@
 #include "mem/cache/replacement_policies/base.hh"
 #include "mem/cache/replacement_policies/replaceable_entry.hh"
 #include "mem/ruby/common/DataBlock.hh"
+#include "mem/ruby/common/MachineID.hh"
 #include "mem/ruby/protocol/CacheRequestType.hh"
 #include "mem/ruby/protocol/CacheResourceType.hh"
 #include "mem/ruby/protocol/RubyRequest.hh"
@@ -94,6 +95,7 @@ class CacheMemory : public SimObject
     //   b) an unused line in the same cache "way"
     bool cacheAvail(Addr address) const;
     bool cacheFullbuthasPend(Addr address);
+    bool cachehasOtherPend(Addr address, MachineID requestor);
 
     bool cacheBlock(Addr address);
 
@@ -147,7 +149,7 @@ class CacheMemory : public SimObject
     bool isLocked (Addr addr, int context);
 
     // functions for set and remove pending address
-    void savePendingAddr(Addr address);
+    void savePendingAddr(Addr address, MachineID machineID);
     void removePendingAddr(Addr address);
     bool isPendingAddr(Addr address);
 
@@ -189,7 +191,7 @@ class CacheMemory : public SimObject
     // The second index is the the amount associativity.
     std::unordered_map<Addr, int> m_tag_index;
     std::vector<std::vector<AbstractCacheEntry*> > m_cache;
-    std::vector<std::vector<Addr>> m_set_pending_addr;
+    std::vector<std::unordered_map<Addr, MachineID>> m_set_pending_addr;
 
     /** We use the replacement policies from the Classic memory system. */
     replacement_policy::Base *m_replacementPolicy_ptr;
@@ -258,6 +260,12 @@ class CacheMemory : public SimObject
 
           statistics::Scalar m_evictions;
 
+          // counters for cache eviction types
+          statistics::Scalar m_evict_putx;
+          statistics::Scalar m_evict_dir_evict;
+          statistics::Scalar m_evict_dir_evict_dirty;
+          statistics::Scalar m_evict_share;
+
           // conters for cache way remained
           // when dir evict
           statistics::Scalar m_remained_entry_0;
@@ -282,6 +290,8 @@ class CacheMemory : public SimObject
       void profilePrefetchHit();
       void profilePrefetchMiss();
       void profileEvictions();
+      void profileBIDirty();
+      void profileEvictionsType(int type);
       void profileRemainedEntry(Addr address);
       void profileSharersNum(int num);
 };

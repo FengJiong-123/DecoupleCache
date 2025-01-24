@@ -71,14 +71,17 @@ action(c_exclusiveReplacement, "c", desc="Send data to memory") {
     assert(is_valid(cache_entry));
     DirEntry dir_entry := getDirEntry(address);
     bool isCacheEvict := false;
+    int CacheEvictType := 0;
     if(triggerInPort.isReady(clockEdge())) {
         peek(triggerInPort, RequestMsg) {
             isCacheEvict := (in_msg.Type == CoherenceRequestType:EVC);
+            CacheEvictType := in_msg.Len;
         }
     }
     //counter
     if (isCacheEvict) {
         L2cache.profileEvictions();
+        L2cache.profileEvictionsType(CacheEvictType);
     }
     DPRINTF(RubySlicc, "c_exclusiveReplacement::addr=%x, dir valid=%d, dirty=%d, isCacheEvict=%d, data=%s\n"
                      , address, is_valid(dir_entry), cache_entry.Dirty, isCacheEvict, cache_entry.DataBlk);
@@ -471,6 +474,7 @@ action(mr_writeDataToCacheFromRequest, "mr", desc="Write data from request queue
                         out_msg.MessageSize := in_msg.MessageSize;
                         out_msg.DataBlk := L2cache_entry.DataBlk;
                         out_msg.Dirty := L2cache_entry.Dirty;
+                        out_msg.Len := 1;
                     }
                 }
             } else {
@@ -550,6 +554,14 @@ action(c_checkCache, "ccc", desc="Check cache can be allocate before back invali
             out_msg.Type := CoherenceRequestType:EVC;
             out_msg.DataBlk := L2cache_entry.DataBlk;
             out_msg.Dirty := L2cache_entry.Dirty;
+            if (evict_need_allocate_cache) {
+                out_msg.Len := 2;
+                if (is_valid(tbe)) {
+                    tbe.hasprofileBIDirty := true; // flag to count
+                }
+            } else {
+                out_msg.Len := 3;
+            }
         }
         // directly allocate cache here
         // otherwise, the other request
@@ -562,7 +574,7 @@ action(c_checkCache, "ccc", desc="Check cache can be allocate before back invali
 
     } else if (evict_need_allocate_cache || request_need_allocate_cache) {
         // still need save pending address
-        L2cache.savePendingAddr(address);
+        L2cache.savePendingAddr(address, machineID);
     }
     //}
 }
@@ -645,7 +657,7 @@ action(rr_deallocateL2CacheBlock, "\r", desc="Deallocate L2 cache block.  Sets t
     L2cache.deallocate(address);
     unset_cache_entry();
     if (ahead_allocate) {
-        L2cache.savePendingAddr(ahead_addr);
+        L2cache.savePendingAddr(ahead_addr, machineID);
     }
 }
 
@@ -690,8 +702,8 @@ action(t_sendDataToMem, "tm", desc="Send data to mem when cache is unavail") {
     peek(responseL2Network_in, ResponseMsg) {
         assert(in_msg.Dirty);
         assert(is_valid(tbe));
-        DPRINTF(RubySlicc, "t_sendDataToMem::addr=%x, hasSendDataToMem=%d\n"
-                         , address, tbe.hasSendDataToMem);
+        DPRINTF(RubySlicc, "t_sendDataToMem::addr=%x, hasSendDataToMem=%d, isDirty=%d\n"
+                         , address, tbe.hasSendDataToMem, in_msg.Dirty);
         if(!tbe.hasSendDataToMem) {
             tbe.hasSendDataToMem := true;
             enqueue(responseL2Network_out, ResponseMsg, l2_request_latency) {
@@ -733,6 +745,14 @@ action(uu_profileMiss, "\um", desc="Profile the demand miss") {
 
 action(uu_profileHit, "\uh", desc="Profile the demand hit") {
     L2cache.profileDemandHit();
+}
+
+action(uu_profileBIDirty, "\ubid", desc="Profile the back invalidation but dirty") {
+    assert(is_valid(tbe));
+    if (tbe.hasprofileBIDirty) {
+        L2cache.profileBIDirty();
+        tbe.hasprofileBIDirty := false;
+    }
 }
 
 action(nn_addSharer, "\n", desc="Add L1 sharer to list") {
@@ -1028,6 +1048,7 @@ transition({I_I, S_I}, Ack) {
 transition({I_I,S_I}, WB_Data, S_I) {
     q_updateAck;
     mr_writeDataToCacheFromRespond;
+    uu_profileBIDirty;
     rp_removeCachePendingAddr;
     o_popIncomingResponseQueue;
 }
@@ -1065,6 +1086,7 @@ transition(S_I, Ack_all, M) {
 
 transition({I_I,S_I}, WB_Data_all, M) {
     mr_writeDataToCacheFromRespond;
+    uu_profileBIDirty;
     rp_removeCachePendingAddr;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
@@ -1310,7 +1332,7 @@ transition(M_I, Mem_Ack, NP) {
     kd_wakeUpDependents;
 }
 
-transition({S_I,I_I,NP,M,MT,MT_MB}, Mem_Ack) {
+transition({S_I,I_I,NP,M,MT,MT_MB,ISS}, Mem_Ack) {
     // this is for cache eviction but
     // encouters SF eviction
     o_popIncomingResponseQueue;

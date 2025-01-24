@@ -273,15 +273,20 @@ CacheMemory::cacheAvail(Addr address) const
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
     // check set whether address is in the pending
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            //m_set_pending_addr[cacheSet].erase(it);
-            DPRINTF(RubyCache, "cacheAvail::hit pending::addr=%x, set=%x\n"
-                             , address, cacheSet);
-            return true;
-        } else {
-            it ++;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it).front == address) {
+    //         DPRINTF(RubyCache, "cacheAvail::hit pending::addr=%x, set=%x\n"
+    //                          , address, cacheSet);
+    //         return true;
+    //     } else {
+    //         it ++;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        DPRINTF(RubyCache, "cacheAvail::hit pending::addr=%x, set=%x\n"
+                         , address, cacheSet);
+        return true;
     }
 
     int set_used_line = 0;
@@ -321,8 +326,27 @@ CacheMemory::cacheFullbuthasPend(Addr address) {
         }
     }
     // pending?
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        DPRINTF(RubyCache, "cacheFullbuthasPend::hit pending::addr=%x, set=%x\n"
+                         , address, cacheSet);
+        return true;
+    }
+    return false;
+}
+
+bool
+CacheMemory::cachehasOtherPend(Addr address, MachineID requestor) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "cachehasOtherPend::addr=%x, set=%x, pending size=%d, requestor=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size(), requestor);
+    // pending?
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        DPRINTF(RubyCache, "cachehasOtherPend::hit pending::addr=%x, set=%x, pending requestor=%d\n"
+                         , address, cacheSet, it->second);
+        if (it->second != requestor) {
             return true;
         }
     }
@@ -340,14 +364,20 @@ CacheMemory::cacheBlock(Addr address) {
     if (m_set_pending_addr[cacheSet].size() < m_cache_assoc) {
         return false;
     }
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            DPRINTF(RubyCache, "cacheBlock::hit pending::addr=%x, set=%x\n"
-                             , address, cacheSet);
-            return false;
-        } else {
-            it ++;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it) == address) {
+    //         DPRINTF(RubyCache, "cacheBlock::hit pending::addr=%x, set=%x\n"
+    //                          , address, cacheSet);
+    //         return false;
+    //     } else {
+    //         it ++;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        DPRINTF(RubyCache, "cacheBlock::hit pending::addr=%x, set=%x\n"
+                         , address, cacheSet);
+        return false;
     }
     return true;
 }
@@ -365,13 +395,17 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
     // check set whether address is in the pending
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            m_set_pending_addr[cacheSet].erase(it);
-            break;
-        } else {
-            it ++;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it)->front == address) {
+    //         m_set_pending_addr[cacheSet].erase(it);
+    //         break;
+    //     } else {
+    //         it ++;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        m_set_pending_addr[cacheSet].erase(it);
     }
 
     // Find the first open slot
@@ -493,12 +527,8 @@ CacheMemory::cacheProbe(Addr address) const
         if (victim_pos == m_cache_assoc) {
             // means all entry is null
             assert(m_set_pending_addr[cacheSet].size() > 0);
-            Addr victim = m_set_pending_addr[cacheSet].front();
+            Addr victim = m_set_pending_addr[cacheSet].begin()->first;
             // TODO:switch to the end
-            //auto front_it = m_set_pending_addr[cacheSet].begin();
-            //m_set_pending_addr[cacheSet].erase(front_it);
-            //m_set_pending_addr[cacheSet].push_back(victim);
-            //assert(m_set_pending_addr[cacheSet].size() == m_cache_assoc);
             return victim;
         }
         assert(m_cache[cacheSet][victim_pos] != NULL);
@@ -703,7 +733,7 @@ CacheMemory::isLocked(Addr address, int context)
 }
 
 void
-CacheMemory::savePendingAddr(Addr address)
+CacheMemory::savePendingAddr(Addr address, MachineID machineID)
 {
     assert(address == makeLineAddress(address));
     if (isTagPresent(address)) {
@@ -717,14 +747,19 @@ CacheMemory::savePendingAddr(Addr address)
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
     // check set whether address is in the pending
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            return;
-        } else {
-            it ++;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it) == address) {
+    //         return;
+    //     } else {
+    //         it ++;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        return;
     }
-    m_set_pending_addr[cacheSet].push_back(address);
+    //m_set_pending_addr[cacheSet].push_back(address);
+    m_set_pending_addr[cacheSet][address] = machineID;
 }
 
 bool
@@ -733,10 +768,14 @@ CacheMemory::isPendingAddr(Addr address) {
     int64_t cacheSet = addressToCacheSet(address);
     DPRINTF(RubyCache, "isPendingAddr::addr=%x, set=%x, pending size=%d\n"
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            return true;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it) == address) {
+    //         return true;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        return true;
     }
     return false;
 }
@@ -750,13 +789,17 @@ CacheMemory::removePendingAddr(Addr address) {
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
     // check set whether address is in the pending
-    for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-        if ((*it) == address) {
-            m_set_pending_addr[cacheSet].erase(it);
-            return;
-        } else {
-            it ++;
-        }
+    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
+    //     if ((*it) == address) {
+    //         m_set_pending_addr[cacheSet].erase(it);
+    //         return;
+    //     } else {
+    //         it ++;
+    //     }
+    // }
+    auto it = m_set_pending_addr[cacheSet].find(address);
+    if (it != m_set_pending_addr[cacheSet].end()) {
+        m_set_pending_addr[cacheSet].erase(it);
     }
 }
 
@@ -788,6 +831,10 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
                m_prefetch_hits + m_prefetch_misses),
       ADD_STAT(m_accessModeType, ""),
       ADD_STAT(m_evictions, "Number of evictions"),
+      ADD_STAT(m_evict_putx, "Number of evictions from PUTX"),
+      ADD_STAT(m_evict_dir_evict, "Number of evictions from directory eviction"),
+      ADD_STAT(m_evict_dir_evict_dirty, "Number of evictions from directory eviction and is dirty"),
+      ADD_STAT(m_evict_share, "Number of evictions from data sharing"),
       ADD_STAT(m_remained_entry_0, "remained entry is 0"),
       ADD_STAT(m_remained_entry_1, "remained entry is 1"),
       ADD_STAT(m_remained_entry_2, "remained entry is 2"),
@@ -1048,6 +1095,26 @@ void
 CacheMemory::profileEvictions()
 {
     cacheMemoryStats.m_evictions++;
+}
+
+void
+CacheMemory::profileBIDirty()
+{
+    cacheMemoryStats.m_evict_dir_evict_dirty++;
+}
+
+void
+CacheMemory::profileEvictionsType(int type)
+{
+    if (type == 1) {
+        cacheMemoryStats.m_evict_putx++;
+    } else if (type == 2) {
+        cacheMemoryStats.m_evict_dir_evict++;
+    } else if (type == 3) {
+        cacheMemoryStats.m_evict_share++;
+    } else {
+        assert(0);
+    }
 }
 
 void

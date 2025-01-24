@@ -183,6 +183,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     bool cacheToEvict, default="false", desc="directory entry tends to evict";
     bool dirToEvict, default="false", desc="directory entry tends to evict";
     bool hasSendDataToMem, default="false", desc="send only in t_sendDataToMem";
+    bool hasprofileBIDirty,default="false", desc="counter flag for back invalidation dirty";
 
     NetDest L1_GetS_IDs,            desc="Set of the internal processors that want the block in shared state";
     MachineID L1_GetX_ID,          desc="ID of the L1 cache to forward the block to once we get a response";
@@ -556,12 +557,17 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
           assert(in_msg.Type == CoherenceRequestType:PUTX);
           assert(in_msg.Dirty);
           DPRINTF(RubySlicc, "triggerInPort::is PUTX::addr=%x, State: %s Req: %s sharers count=%d\n"
-                           , in_msg.addr, state, in_msg.Requestor);
+                           , in_msg.addr, state, in_msg.Requestor, dir_entry.Sharers.count());
           if (state == State:SS || state == State:MT) {
             assert(is_valid(dir_entry));
             if (dir_entry.Sharers.count() > 2) {
               trigger(Event:L1_PUTX_end_toSS, in_msg.addr, cache_entry, tbe);
             } else if (dir_entry.Sharers.count() == 2) {
+              if (state == State:SS && !dir_entry.Sharers.isElement(in_msg.Requestor)) {
+                // PUTX encounters back invalid
+                // set state to be SS instead of MT
+                trigger(Event:L1_PUTX_end_toSS, in_msg.addr, cache_entry, tbe);
+              }
               trigger(Event:L1_PUTX_end_toMT, in_msg.addr, cache_entry, tbe);
             } else if (dir_entry.Sharers.count() == 1 && state == State:MT &&
                       !dir_entry.Sharers.isElement(in_msg.Requestor)) {
@@ -627,8 +633,8 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             // it is possible that the address has been stalled
             // by the other request, the cacheavail checks just hit
             // the pending address, we need to stall it again
-            //if (L1RequestL2Network_in.hasStalledMsg(in_msg.addr) && SF.cacheFullbuthasPend(in_msg.addr)) {
-            if (SF.cacheFullbuthasPend(in_msg.addr) && 
+            // 
+            if ((SF.cacheFullbuthasPend(in_msg.addr) || SF.cachehasOtherPend(in_msg.addr, in_msg.Requestor)) && 
                (state == State:M || state == State:NP)) {
               DPRINTF(RubySlicc, "L1RequestL2Network_in::directory has stall::addr=%x, state=%d\n"
                                , in_msg.addr, state);
@@ -672,7 +678,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
 
             stall_and_wait(L1RequestL2Network_in, victim);
             // savePendingAddr
-            SF.savePendingAddr(in_msg.addr);
+            SF.savePendingAddr(in_msg.addr, in_msg.Requestor);
             // insert to trigger port
             enqueue(triggerOutPort, RequestMsg, 0) {
               out_msg.addr := victim;

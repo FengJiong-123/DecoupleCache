@@ -186,7 +186,7 @@ AbstractController::wakeUpBuffers(Addr addr)
         // Wake up all possible lower rank (i.e. lower priority) buffers that could
         // be waiting on this message.
         //
-        for (int in_port_rank = m_cur_in_port - 1;
+        for (int in_port_rank = m_cur_in_port;
              in_port_rank >= 0;
              in_port_rank--) {
             if ((*(m_waiting_buffers[addr]))[in_port_rank] != NULL) {

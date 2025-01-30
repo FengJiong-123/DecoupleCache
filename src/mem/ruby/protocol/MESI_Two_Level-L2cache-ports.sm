@@ -126,7 +126,6 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     // SF eviction event
     SF_Replacement,          desc="SF Replacement", format="!r";
     SF_Replacement_withC,    desc="SF Replacement with cache", format="!r";
-    SF_FakeReplacement,      desc="SF Replacement twice", format="!r";
 
     // events from memory controller
     Mem_Data,                desc="data from memory", format="!r";
@@ -180,6 +179,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     State TBEState,             desc="Transient state";
     DataBlock DataBlk,          desc="Buffer for the data block";
     bool Dirty, default="false", desc="Data is Dirty";
+    bool dataBackInvalid, default="false", desc="back invalid data need to allocate";
     bool cacheToEvict, default="false", desc="directory entry tends to evict";
     bool dirToEvict, default="false", desc="directory entry tends to evict";
     bool hasSendDataToMem, default="false", desc="send only in t_sendDataToMem";
@@ -444,9 +444,9 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         CacheEntry cache_entry := getCacheEntry(in_msg.addr);
         DirEntry   dir_entry   := getDirEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
+        State state := getState(tbe, cache_entry, in_msg.addr);
         DPRINTF(RubySlicc, "responseL2Network_in::addr=%x State: %s Sender: %s Type: %s ackcount=%d cachetoEvict=%d, dirToEvict=%d\n",
-                in_msg.addr, getState(tbe, cache_entry, in_msg.addr),
-                in_msg.Sender, in_msg.Type, in_msg.AckCount, isCacheToEvict(tbe), isDirToEvict(tbe));
+                in_msg.addr, state, in_msg.Sender, in_msg.Type, in_msg.AckCount, isCacheToEvict(tbe), isDirToEvict(tbe));
 
         if(machineIDToMachineType(in_msg.Sender) == MachineType:L1Cache) {
           if (isDirToEvict(tbe)) {
@@ -454,8 +454,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             // is the directory back invalidation
             if(getPendingAcks(tbe) > 1) {
               if (in_msg.Type == CoherenceResponseType:DATA && in_msg.Dirty) {
-                if (getState(tbe, cache_entry, in_msg.addr) == State:I_I && 
-                    isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
+                if (state == State:I_I && isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
                     // here is the situation that directory eviction
                     // encounter cache eviction, we deallocate cache
                     // entry first and set state to I_I. However, the
@@ -465,38 +464,66 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                     // MAYBE FAULT!!
                   trigger(Event:WB_Data_Keep, in_msg.addr, cache_entry, tbe);
                 }
-                trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
+                //trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
+                trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
               } else {
                 trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
               }
             } else {
               assert(getPendingAcks(tbe) == 1);
-              if (in_msg.Type == CoherenceResponseType:DATA && in_msg.Dirty) {
-                if (getState(tbe, cache_entry, in_msg.addr) == State:I_I && 
-                    isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
+              if ((in_msg.Type == CoherenceResponseType:DATA && in_msg.Dirty) ||
+                   tbe.dataBackInvalid) { // need to allocate cache
+                if (state == State:I_I && isCacheToEvict(tbe) && !L2cache.cacheAvail(in_msg.addr)) {
                   // MAYBE FAULT!!
                   trigger(Event:Ack_all_DtoMem, in_msg.addr, cache_entry, tbe);
                 }
-                trigger(Event:WB_Data_all, in_msg.addr, cache_entry, tbe);
+
+                if (L2cache.cacheAvail(in_msg.addr)) {
+                  // allocate back invalidate data
+                  trigger(Event:WB_Data_all, in_msg.addr, cache_entry, tbe);
+
+                } else {
+                  // cache evict
+                  Addr victim := L2cache.cacheProbe(in_msg.addr);
+                  CacheEntry L2cache_entry := getCacheEntry(victim);
+                  TBE tbe_victim := TBEs[victim];
+                  State victim_state := getState(tbe_victim, L2cache_entry, victim);
+                  DPRINTF(RubySlicc, "responseL2Network_in::Cache victim::addr=%x, victim=%x, victim state=%d\n"
+                                   , in_msg.addr, victim, victim_state);
+                  enqueue(triggerOutPort, RequestMsg, 0) {
+                    out_msg.addr := victim;
+                    out_msg.Type := CoherenceRequestType:EVC;
+                    out_msg.DataBlk := L2cache_entry.DataBlk;
+                    out_msg.Dirty := L2cache_entry.Dirty;
+                    out_msg.Len := 2;
+                  }
+                  tbe.hasprofileBIDirty := true;
+                  L2cache_entry.aheadAllocate := true;
+                  L2cache_entry.aheadAddr := in_msg.addr;
+                  // set MRU to stop replacement twice
+                  L2cache.setMRU(victim);
+                  stall_and_wait(responseL2Network_in, victim);
+                }
               } else {
                 trigger(Event:Ack_all, in_msg.addr, cache_entry, tbe);
               }
             }
-          }
-          if(in_msg.Type == CoherenceResponseType:DATA) {
-            if (in_msg.Dirty) {
-              trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
-            } else {
-              trigger(Event:WB_Data_clean, in_msg.addr, cache_entry, tbe);
-            }
-          } else if (in_msg.Type == CoherenceResponseType:ACK) {
-            if ((getPendingAcks(tbe) - in_msg.AckCount) == 0) {
-              trigger(Event:Ack_all, in_msg.addr, cache_entry, tbe);
-            } else {
-              trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
-            }
           } else {
-            error("unknown message type");
+            if(in_msg.Type == CoherenceResponseType:DATA) {
+              if (in_msg.Dirty) {
+                trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
+              } else {
+                trigger(Event:WB_Data_clean, in_msg.addr, cache_entry, tbe);
+              }
+            } else if (in_msg.Type == CoherenceResponseType:ACK) {
+              if ((getPendingAcks(tbe) - in_msg.AckCount) == 0) {
+                trigger(Event:Ack_all, in_msg.addr, cache_entry, tbe);
+              } else {
+                trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
+              }
+            } else {
+              error("unknown message type");
+            }
           }
 
         } else { // external message

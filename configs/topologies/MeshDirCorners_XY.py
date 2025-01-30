@@ -45,6 +45,17 @@ class MeshDirCorners_XY(SimpleTopology):
         nodes = self.nodes
 
         num_routers = options.num_cpus
+        num_l2caches = options.num_l2caches
+        l2_pos = []
+        if num_routers == 4 and num_l2caches == 4:
+            l2_pos = [0,1,2,3]
+        elif num_routers == 16 and num_l2caches == 8:
+            l2_pos = [1,3,4,6,9,11,12,14]
+        elif num_routers == 64 and num_l2caches == 8:
+            l2_pos = [1,5,18,22,43,47,56,60]
+        else:
+            # not support other topo
+            assert(False)
         num_rows = options.mesh_rows
 
         # default values for link latency and router latency.
@@ -77,7 +88,7 @@ class MeshDirCorners_XY(SimpleTopology):
         num_columns = int(num_routers / num_rows)
         assert num_columns * num_rows == num_routers
         caches_per_router, remainder = divmod(len(cache_nodes), num_routers)
-        assert remainder == 0
+        #assert remainder == 0
         assert len(dir_nodes) == 4
 
         # Create the routers in the mesh
@@ -93,8 +104,16 @@ class MeshDirCorners_XY(SimpleTopology):
         # Connect each cache controller to the appropriate router
         ext_links = []
         for i, n in enumerate(cache_nodes):
-            cntrl_level, router_id = divmod(i, num_routers)
-            assert cntrl_level < caches_per_router
+            #cntrl_level, router_id = divmod(i, num_routers)
+            #assert cntrl_level < caches_per_router
+            if n.type == "L2Cache_Controller":
+                router_id = l2_pos[i - 2*num_routers]
+            elif n.type == "L1Cache_Controller":
+                router_id = i - num_routers
+            else:
+                assert n.type == "L0Cache_Controller"
+                router_id = i
+            assert(router_id < num_routers)
             ext_links.append(
                 ExtLink(
                     link_id=link_count,
@@ -103,6 +122,7 @@ class MeshDirCorners_XY(SimpleTopology):
                     latency=link_latency,
                 )
             )
+            print(n,router_id)
             link_count += 1
 
         # NUMA Node for each quadrant

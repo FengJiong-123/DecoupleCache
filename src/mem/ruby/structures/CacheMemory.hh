@@ -205,6 +205,7 @@ class CacheMemory : public SimObject
     int m_cache_num_set_bits;
     int m_cache_assoc;
     int m_cache_expand;
+    int m_cache_block_num;
     int m_new_replacement;
     int m_start_index_bit;
     bool m_resource_stalls;

@@ -84,6 +84,7 @@ def define_options(parser):
     parser.add_argument("--SF_size", type=str, default="1MB")
     parser.add_argument("--SF_assoc", type=int, default=8)
     parser.add_argument("--SF_expand", type=int, default=1)
+    parser.add_argument("--Cache_Block_num", type=int, default=0)
     parser.add_argument("--l0_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l1_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l2_transitions_per_cycle", type=int, default=4)
@@ -253,6 +254,7 @@ def create_system(
             l2_cache = L2Cache(
                 size=options.l2_size,
                 assoc=options.l2_assoc,
+                block_num=options.Cache_Block_num,
                 start_index_bit=l2_index_start,
                 new_replacement_policy=1,
             )

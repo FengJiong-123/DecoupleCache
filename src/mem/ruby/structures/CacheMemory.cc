@@ -80,6 +80,7 @@ CacheMemory::CacheMemory(const Params &p)
     m_cache_size = p.size;
     m_cache_assoc = p.assoc;
     m_cache_expand = p.expand;
+    m_cache_block_num = p.block_num;
     m_replacementPolicy_ptr = p.replacement_policy;
     m_new_replacement = p.new_replacement_policy;
     m_start_index_bit = p.start_index_bit;
@@ -100,7 +101,7 @@ CacheMemory::init()
     assert(m_cache_num_sets > 1);
     m_cache_num_set_bits = floorLog2(m_cache_num_sets);
     assert(m_cache_num_set_bits > 0);
-    m_cache_assoc = m_cache_assoc * m_cache_expand;
+    m_cache_assoc = m_cache_assoc * m_cache_expand - m_cache_block_num;
 
     m_cache.resize(m_cache_num_sets,
                     std::vector<AbstractCacheEntry*>(m_cache_assoc, nullptr));
@@ -114,8 +115,8 @@ CacheMemory::init()
                                 m_replacementPolicy_ptr->instantiateEntry();
         }
     }
-    DPRINTF(RubyCache, "init::m_cache_size=%s, m_cache_assoc=%d, expand=%d, m_cache_num_sets=%d\n"
-                     , m_cache_size, m_cache_assoc, m_cache_expand, m_cache_num_sets);
+    DPRINTF(RubyCache, "init::m_cache_size=%s, m_cache_assoc=%d, expand=%d, block_num=%d, m_cache_num_sets=%d\n"
+                     , m_cache_size, m_cache_assoc, m_cache_expand, m_cache_block_num, m_cache_num_sets);
 }
 
 CacheMemory::~CacheMemory()

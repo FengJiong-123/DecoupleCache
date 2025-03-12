@@ -81,6 +81,8 @@ CacheMemory::CacheMemory(const Params &p)
     m_cache_assoc = p.assoc;
     m_cache_expand = p.expand;
     m_cache_block_num = p.block_num;
+    m_cache_backup_entry = p.cache_backup;
+    m_dir_tag_per_line = p.dir_tag_per_line;
     m_replacementPolicy_ptr = p.replacement_policy;
     m_new_replacement = p.new_replacement_policy;
     m_start_index_bit = p.start_index_bit;
@@ -147,10 +149,13 @@ CacheMemory::findTagInSet(int64_t cacheSet, Addr tag) const
     assert(tag == makeLineAddress(tag));
     // search the set for the tags
     auto it = m_tag_index.find(tag);
-    if (it != m_tag_index.end())
-        if (m_cache[cacheSet][it->second]->m_Permission !=
-            AccessPermission_NotPresent)
+    if (it != m_tag_index.end()) {
+        if (m_cache[cacheSet][it->second]->m_Permission != AccessPermission_NotPresent) {
+            DPRINTF(RubyCache, "findTagInSet::addr=%x, pos=%d\n"
+                             , tag, it->second);
             return it->second;
+        }
+    }
     return -1; // Not found
 }
 
@@ -273,22 +278,16 @@ CacheMemory::cacheAvail(Addr address) const
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
-    // check set whether address is in the pending
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it).front == address) {
-    //         DPRINTF(RubyCache, "cacheAvail::hit pending::addr=%x, set=%x\n"
-    //                          , address, cacheSet);
-    //         return true;
-    //     } else {
-    //         it ++;
-    //     }
-    // }
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         DPRINTF(RubyCache, "cacheAvail::hit pending::addr=%x, set=%x\n"
                          , address, cacheSet);
         return true;
     }
+
+    //debug
+    // auto itit = m_tag_index.find(0x1f0600);
+    // if (itit != m_tag_index.end()) {DPRINTF(RubyCache, "cacheAvail::check for 0x1f0600 at pos=%d\n", itit->second);}
 
     int set_used_line = 0;
     for (int i = 0; i < m_cache_assoc; i++) {
@@ -395,30 +394,25 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
-    // check set whether address is in the pending
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it)->front == address) {
-    //         m_set_pending_addr[cacheSet].erase(it);
-    //         break;
-    //     } else {
-    //         it ++;
-    //     }
-    // }
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         m_set_pending_addr[cacheSet].erase(it);
     }
 
+    //debug
+    // auto itit = m_tag_index.find(0x1f0600);
+    // if (itit != m_tag_index.end()) {DPRINTF(RubyCache, "allocate::check for 0x1f0600 at pos=%d\n", itit->second);}
+
     // Find the first open slot
     std::vector<AbstractCacheEntry*> &set = m_cache[cacheSet];
     for (int i = 0; i < m_cache_assoc; i++) {
         // for debug only
-        if (!set[i]) {
-            DPRINTF(RubyCache, "allocate::this pos %d is free \n", i);
-        } else {
-            DPRINTF(RubyCache, "allocate::this pos %d has addr=%x with permission=%d\n"
-                             , i, set[i]->m_Address, set[i]->m_Permission);
-        }
+        // if (!set[i]) {
+        //     DPRINTF(RubyCache, "allocate::this pos %d is free \n", i);
+        // } else {
+        //     DPRINTF(RubyCache, "allocate::this pos %d has addr=%x with permission=%d\n"
+        //                      , i, set[i]->m_Address, set[i]->m_Permission);
+        // }
         if (!set[i] || set[i]->m_Permission == AccessPermission_NotPresent) {
             if (set[i] && (set[i] != entry)) {
                 warn_once("This protocol contains a cache entry handling bug: "
@@ -430,13 +424,14 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
             set[i] = entry;  // Init entry
             set[i]->m_Address = address;
             set[i]->m_Permission = AccessPermission_Invalid;
-            DPRINTF(RubyCache, "Allocate clearing lock for addr: 0x%x\n",
-                    address);
+            DPRINTF(RubyCache, "Allocate clearing lock for addr=%x pos=%d\n",
+                    address, i);
             set[i]->m_locked = -1;
             m_tag_index[address] = i;
             set[i]->setPosition(cacheSet, i);
             //set[i]->replacementData = replacement_data[cacheSet][i];
             set[i]->setLastAccess(curTick());
+            assert(findTagInSet(cacheSet, address) == i);
 
             // Call reset function here to set initial value for different
             // replacement policies.
@@ -451,17 +446,36 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
 void
 CacheMemory::deallocate(Addr address)
 {
-    DPRINTF(RubyCache, "deallocating address: %#x\n", address);
     AbstractCacheEntry* entry = lookup(address);
     assert(entry != nullptr);
+    DPRINTF(RubyCache, "deallocate::addr=%x, addr in entry=%x\n", address, entry->m_Address);
+    assert(entry->m_Address == address);
     //m_replacementPolicy_ptr->invalidate(entry->replacementData);
     uint32_t cache_set = entry->getSet();
     uint32_t way = entry->getWay();
     entry->setLastAccess(0);
+    assert(m_cache[cache_set][way]->m_Address == address);
     delete entry;
     m_cache[cache_set][way] = NULL;
     m_tag_index.erase(address);
 }
+
+// int64_t cacheSet = addressToCacheSet(address);
+//     int pos = m_cache_assoc;
+//     for (int i = 0; i < m_cache_assoc; i++) {
+//         if (m_cache[cacheSet][i] == NULL) {
+//             continue;
+//         }
+//         if (m_cache[cacheSet][i]->m_Address == address) {
+//             pos = i;
+//             break;
+//         }
+//     }
+//     delete & m_cache[cacheSet][pos];
+//     m_cache[cacheSet][pos] = NULL;
+//     m_tag_index.erase(address);
+//     DPRINTF(RubyCache, "deallocate::addr=%x, cacheSet=%d, way=%d\n"
+//                      , address, cacheSet, pos);
 
 // Returns with the physical address of the conflicting cache line
 Addr
@@ -473,6 +487,11 @@ CacheMemory::cacheProbe(Addr address) const
     int64_t cacheSet = addressToCacheSet(address);
     std::vector<ReplaceableEntry*> candidates;
     DPRINTF(RubyCache, "cacheProbe::cacheSet=%d\n", cacheSet);
+
+    //debug
+    // auto itit = m_tag_index.find(0x1f0600);
+    // if (itit != m_tag_index.end()) {DPRINTF(RubyCache, "cacheProbe::check for 0x1f0600 at pos=%d\n", itit->second);}
+
     // use new replacement policy to deter victim
     if (m_new_replacement == 0) {
         Tick least_tick = curTick() + 1;
@@ -505,9 +524,6 @@ CacheMemory::cacheProbe(Addr address) const
         // LRU with waitEvict
         Tick least_tick = curTick() + 1;
         int victim_pos = m_cache_assoc;
-        //auto least_tick_iter = m_cache[cacheSet].end();
-        //for (auto it = m_cache[cacheSet].begin(); it != m_cache[cacheSet].end(); it ++) {
-        //for (auto it : m_cache[cacheSet]) {
         for (int i = 0; i < m_cache_assoc; i ++) {
             if (m_cache[cacheSet][i] != NULL) {
                 DPRINTF(RubyCache, "cacheProbe::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d\n"
@@ -537,15 +553,46 @@ CacheMemory::cacheProbe(Addr address) const
         assert(!m_cache[cacheSet][victim_pos]->m_waitEvict);
         m_cache[cacheSet][victim_pos]->m_waitEvict = true;
         return m_cache[cacheSet][victim_pos]->m_Address;
+        
+    } else if (m_new_replacement == 2) {
+        // LRU with waitEvict
+        Tick least_tick = curTick() + 1;
+        int victim_pos = m_cache_assoc;
+        for (int i = 0; i < m_cache_assoc; i ++) {
+            if (m_cache[cacheSet][i] != NULL) {
+                DPRINTF(RubyCache, "cacheProbe::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d, is backup=%d\n"
+                                 , m_cache[cacheSet][i]->m_Address, i
+                                 , m_cache[cacheSet][i]->getLastAccess()
+                                 , m_cache[cacheSet][i]->m_waitEvict
+                                 , m_cache[cacheSet][i]->m_is_backup);
+                assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
+                if (m_cache[cacheSet][i]->getLastAccess() < least_tick &&
+                   !m_cache[cacheSet][i]->m_waitEvict &&
+                   !m_cache[cacheSet][i]->m_is_backup) {
+                    least_tick = m_cache[cacheSet][i]->getLastAccess();
+                    victim_pos = i;
+                }
+            } else {
+                DPRINTF(RubyCache, "cacheProbe::entry is null, pos=%d\n", i);
+            }
+        }
+        assert(victim_pos <= m_cache_assoc);
+        if (victim_pos == m_cache_assoc) {
+            // means all entry is null
+            assert(m_set_pending_addr[cacheSet].size() > 0);
+            Addr victim = m_set_pending_addr[cacheSet].begin()->first;
+            // TODO:switch to the end
+            return victim;
+        }
+        assert(m_cache[cacheSet][victim_pos] != NULL);
+        assert(m_cache[cacheSet][victim_pos]->getLastAccess() < curTick() + 1);
+        assert(!m_cache[cacheSet][victim_pos]->m_waitEvict);
+        m_cache[cacheSet][victim_pos]->m_waitEvict = true;
+        return m_cache[cacheSet][victim_pos]->m_Address;
     } else {
         assert(false);
     }
-    // for (int i = 0; i < m_cache_assoc; i++) {
-    //     candidates.push_back(static_cast<ReplaceableEntry*>(
-    //                                                    m_cache[cacheSet][i]));
-    // }
-    // return m_cache[cacheSet][m_replacementPolicy_ptr->
-    //                     getVictim(candidates)->getWay()]->m_Address;
+
     return 0;
 }
 
@@ -594,20 +641,6 @@ void
 CacheMemory::setMRU(Addr address, int occupancy)
 {
     assert(false);
-    // AbstractCacheEntry* entry = lookup(makeLineAddress(address));
-    // if (entry != nullptr) {
-    //     // m_use_occupancy can decide whether we are using WeightedLRU
-    //     // replacement policy. Depending on different replacement policies,
-    //     // use different touch() function.
-    //     if (m_use_occupancy) {
-    //         static_cast<replacement_policy::WeightedLRU*>(
-    //             m_replacementPolicy_ptr)->touch(
-    //             entry->replacementData, occupancy);
-    //     } else {
-    //         m_replacementPolicy_ptr->touch(entry->replacementData);
-    //     }
-    //     entry->setLastAccess(curTick());
-    // }
 }
 
 int
@@ -740,21 +773,13 @@ CacheMemory::savePendingAddr(Addr address, MachineID machineID)
     if (isTagPresent(address)) {
         return;
     }
-    //assert(cacheAvail(address));
 
     // Find the first open slot
     int64_t cacheSet = addressToCacheSet(address);
     DPRINTF(RubyCache, "savePendingAddr::addr=%x, set=%x, pending size=%d\n"
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
-    // check set whether address is in the pending
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it) == address) {
-    //         return;
-    //     } else {
-    //         it ++;
-    //     }
-    // }
+
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         return;
@@ -769,11 +794,6 @@ CacheMemory::isPendingAddr(Addr address) {
     int64_t cacheSet = addressToCacheSet(address);
     DPRINTF(RubyCache, "isPendingAddr::addr=%x, set=%x, pending size=%d\n"
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it) == address) {
-    //         return true;
-    //     }
-    // }
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         return true;
@@ -789,20 +809,353 @@ CacheMemory::removePendingAddr(Addr address) {
                      , address, cacheSet, m_set_pending_addr[cacheSet].size());
     assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
 
-    // check set whether address is in the pending
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it) == address) {
-    //         m_set_pending_addr[cacheSet].erase(it);
-    //         return;
-    //     } else {
-    //         it ++;
-    //     }
-    // }
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         m_set_pending_addr[cacheSet].erase(it);
     }
 }
+
+bool
+CacheMemory::isFreetoBackup(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "isFreetoBackup::addr=%x, set=%x, pending size=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size());
+    if (m_cache_backup_entry == 0) {
+        return false;
+    }
+
+    // get back up entry number
+    int backup_entry = 0;
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            backup_entry ++;
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            if (m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
+                return true;
+            }
+        }
+    }
+    assert(backup_entry <= m_cache_backup_entry);
+    return (backup_entry < m_cache_backup_entry);
+}
+
+bool
+CacheMemory::isDirinBackup(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "isDirinBackup::addr=%x, set=%x\n"
+                     , address, cacheSet);
+    if (m_cache_backup_entry == 0) {
+        return false;
+    }
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+std::string
+CacheMemory::getbkDirState(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "getbkDirState::addr=%x, set=%x\n"
+                     , address, cacheSet);
+    assert(m_cache_backup_entry != 0);
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    return (*it)->state;
+                }
+            }
+        }
+    }
+    assert(false);
+    return "NP";
+}
+
+MachineID
+CacheMemory::getSharerinBackup(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "getSharerinBackup::addr=%x, set=%x\n"
+                     , address, cacheSet);
+    assert(m_cache_backup_entry != 0);
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    return (*it)->sharer;
+                }
+            }
+        }
+    }
+    assert(false);
+    //return "NP";
+}
+
+AbstractCacheEntry*
+CacheMemory::insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *entry) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "insertDirBk::addr=%x, set=%x\n"
+                     , address, cacheSet);
+
+    int insert_pos = m_cache_assoc;
+    int back_entry = 0;
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            insert_pos = i;
+            continue;
+        }
+        DPRINTF(RubyCache, "insertDirBk::pos=%d, m_is_backup=%d, dir size=%d\n"
+                         , i, m_cache[cacheSet][i]->m_is_backup, m_cache[cacheSet][i]->m_dir_bkup.size());
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            // count back entry
+            back_entry ++;
+        }
+        assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+        // get an entry has been set as backup
+        if (m_cache[cacheSet][i]->m_is_backup && 
+            m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
+            m_cache[cacheSet][i]->insertDirBk(address, sharer);
+            m_cache[cacheSet][i]->setLastAccess(curTick());
+            m_tag_index[address] = i;
+            delete entry;
+            DPRINTF(RubyCache, "insertDirBk::back in existed entry\n");
+            return m_cache[cacheSet][i];
+        }
+    }
+    if (insert_pos < m_cache_assoc && back_entry < m_cache_backup_entry) {
+        assert(m_cache[cacheSet][insert_pos] == NULL);
+        //AbstractCacheEntry* new_cache_entry = new AbstractCacheEntry;
+        m_cache[cacheSet][insert_pos] = entry;  // Init entry
+        m_cache[cacheSet][insert_pos]->m_Address = -1;
+        m_cache[cacheSet][insert_pos]->m_Permission = AccessPermission_Invalid;
+        m_cache[cacheSet][insert_pos]->m_locked = -1;
+        m_tag_index[address] = insert_pos;
+        m_cache[cacheSet][insert_pos]->setPosition(cacheSet, insert_pos);
+        m_cache[cacheSet][insert_pos]->setLastAccess(curTick());
+        m_cache[cacheSet][insert_pos]->m_is_backup = true;
+        m_cache[cacheSet][insert_pos]->insertDirBk(address, sharer);
+        DPRINTF(RubyCache, "insertDirBk::back in new entry\n");
+        return m_cache[cacheSet][insert_pos];
+    }
+    panic("can't insert a backup dir entry!!!");
+}
+
+void
+CacheMemory::removeDirBk(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+        // get an entry has been set as backup
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end();) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    it = m_cache[cacheSet][i]->m_dir_bkup.erase(it);
+                    // clean up tag index
+                    m_tag_index.erase(address);
+                    if (m_cache[cacheSet][i]->m_dir_bkup.size() > 0) {
+                        DPRINTF(RubyCache, "removeDirBk::entry is keep::addr=%x, set=%x, size=%d\n"
+                                         , address, cacheSet, m_cache[cacheSet][i]->m_dir_bkup.size());
+                        m_cache[cacheSet][i]->setLastAccess(curTick());
+                        return;
+                    } else {
+                        break;
+                    }
+                } else {
+                    it ++;
+                }
+            }
+            if (m_cache[cacheSet][i]->m_dir_bkup.size() == 0) {
+                // clean up the back up entry
+                DPRINTF(RubyCache, "removeDirBk::delete entry::addr=%x, set=%x\n"
+                                 , address, cacheSet);
+                //AbstractCacheEntry* entry = m_cache[cacheSet][i];
+                assert(m_cache[cacheSet][i] != nullptr);
+                m_cache[cacheSet][i]->setLastAccess(0);
+                delete m_cache[cacheSet][i];
+                m_cache[cacheSet][i] = NULL;
+                return;
+            }
+        }
+    }
+    panic("can't remove a backup dir entry!!!");
+}
+
+void
+CacheMemory::setDirState(Addr address, const std::string& state) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "setDirState::addr=%x, set=%x, state=%s\n"
+                     , address, cacheSet, state);
+
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+        DPRINTF(RubyCache, "setDirState::pos=%d, addr=%x, m_is_backup=%d, dir size=%d\n"
+                         , i, m_cache[cacheSet][i]->m_Address
+                         , m_cache[cacheSet][i]->m_is_backup, m_cache[cacheSet][i]->m_dir_bkup.size());
+        // get an entry has been set as backup
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    (*it)->state = state;
+                    return;
+                }
+            }
+        }
+    }
+    panic("can't set a backup dir entry state!!!");
+}
+
+Addr
+//CacheMemory::cacheProbetoBk(Addr address, AbstractCacheEntry *entry)
+CacheMemory::cacheProbetoBk(Addr address)
+{
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    //DPRINTF(RubyCache, "cacheProbetoBk::addr=%x, cacheSet=%x\n",address, cacheSet);
+    Tick least_tick = curTick() + 1;
+    int victim_pos = m_cache_assoc;
+    //int null_pos = m_cache_assoc;
+    // get back up entry number
+    // int backup_entry = 0;
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] != NULL) {
+            DPRINTF(RubyCache, "cacheProbetoBk::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d, m_is_backup=%d, dir entry size=%d\n"
+                             , m_cache[cacheSet][i]->m_Address, i
+                             , m_cache[cacheSet][i]->getLastAccess()
+                             , m_cache[cacheSet][i]->m_waitEvict
+                             , m_cache[cacheSet][i]->m_is_backup
+                             , m_cache[cacheSet][i]->m_dir_bkup.size());
+            assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
+            // if (m_cache[cacheSet][i]->m_is_backup) {
+            //     backup_entry ++;
+            // }
+            if (m_cache[cacheSet][i]->m_is_backup && m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
+                // this entry has been occupied and is still available
+                m_cache[cacheSet][i]->setLastAccess(curTick());
+                // set up index
+                // m_tag_index[address] = i;
+                // delete entry;
+                return -1;
+            }
+            if (m_cache[cacheSet][i]->getLastAccess() < least_tick &&
+                   !m_cache[cacheSet][i]->m_waitEvict &&
+                   !m_cache[cacheSet][i]->m_is_backup) {
+                least_tick = m_cache[cacheSet][i]->getLastAccess();
+                victim_pos = i;
+            }
+        } else {
+            DPRINTF(RubyCache, "cacheProbetoBk::entry is null, pos=%d\n", i);
+            // could return
+            // null_pos = i;
+            return -1;
+        }
+    }
+    // if (null_pos < m_cache_assoc && backup_entry < m_dir_tag_per_line) {
+    //     // allocate a new entry and set to be backup
+    //     assert(m_cache[cacheSet][null_pos] == NULL);
+    //     //AbstractCacheEntry* new_cache_entry = new AbstractCacheEntry;
+    //     m_cache[cacheSet][null_pos] = entry;  // Init entry
+    //     m_cache[cacheSet][null_pos]->m_Address = -1;
+    //     m_cache[cacheSet][null_pos]->m_Permission = AccessPermission_Invalid;
+    //     m_cache[cacheSet][null_pos]->m_locked = -1;
+    //     //m_tag_index[address] = null_pos;
+    //     m_cache[cacheSet][null_pos]->setPosition(cacheSet, null_pos);
+    //     m_cache[cacheSet][null_pos]->setLastAccess(curTick());
+    //     m_cache[cacheSet][null_pos]->m_is_backup = true;
+    //     return -1;
+    // }
+
+    assert(victim_pos < m_cache_assoc);
+    assert(m_cache[cacheSet][victim_pos] != NULL);
+    assert(m_cache[cacheSet][victim_pos]->getLastAccess() < curTick() + 1);
+    m_cache[cacheSet][victim_pos]->m_waitEvict = true;
+    // delete entry;
+    return m_cache[cacheSet][victim_pos]->m_Address;
+}
+
+void
+CacheMemory::reviseIndex(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "reviseIndex::addr=%x, set=%x\n"
+                     , address, cacheSet);
+    int pos = m_cache_assoc;
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    // dir in back up check
+                    assert(false);
+                }
+            }
+        }
+        if (m_cache[cacheSet][i]->m_Address) {
+            pos = i;
+        }
+    }
+    assert(pos < m_cache_assoc);
+    m_tag_index[address] = pos;
+}
+
+// void
+// CacheMemory::updateSharerNum(Addr address, int sharersNum) {
+//     assert(address == makeLineAddress(address));
+//     int64_t cacheSet = addressToCacheSet(address);
+//     DPRINTF(RubyCache, "updateSharerNum::addr=%x, set=%x, sharersNum=%d\n"
+//                      , address, cacheSet, sharersNum);
+
+//     for (int i = 0; i < m_cache_assoc; i ++) {
+//         if (m_cache[cacheSet][i] == NULL) {
+//             continue;
+//         }
+//         // get an entry has been set as backup
+//         if (m_cache[cacheSet][i]->address == address) {
+//             m_cache[cacheSet][i]->m_sharer_num = sharersNum;
+//         }
+//     }
+// }
+
 
 CacheMemory::
 CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)

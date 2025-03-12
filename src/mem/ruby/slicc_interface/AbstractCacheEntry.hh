@@ -52,12 +52,21 @@
 #include "mem/ruby/common/Address.hh"
 #include "mem/ruby/common/DataBlock.hh"
 #include "mem/ruby/protocol/AccessPermission.hh"
+#include "mem/ruby/common/MachineID.hh"
 
 namespace gem5
 {
 
 namespace ruby
 {
+
+struct DirInCacheEntry {
+  Addr address;
+  MachineID sharer;
+  std::string state;
+  bool waitEvict;
+  bool isBlocked;
+};
 
 class AbstractCacheEntry : public ReplaceableEntry
 {
@@ -107,6 +116,9 @@ class AbstractCacheEntry : public ReplaceableEntry
     int m_locked;
     bool m_complete;
     bool m_waitEvict;
+    bool m_is_backup;
+    std::vector<DirInCacheEntry *> m_dir_bkup;
+    int m_sharer_num;
 
     AccessPermission m_Permission; // Access permission for this
                                    // block, required by CacheMemory
@@ -116,6 +128,9 @@ class AbstractCacheEntry : public ReplaceableEntry
 
     // Set the last access Tick.
     void setLastAccess(Tick tick) { m_last_touch_tick = tick; }
+
+    // insert an backup dir entry
+    void insertDirBk(Addr address, MachineID sharer);
 
     // hardware transactional memory
     void setInHtmReadSet(bool val);

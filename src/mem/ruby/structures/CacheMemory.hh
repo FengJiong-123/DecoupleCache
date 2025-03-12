@@ -153,6 +153,19 @@ class CacheMemory : public SimObject
     void removePendingAddr(Addr address);
     bool isPendingAddr(Addr address);
 
+    // functions for cache backup
+    bool isFreetoBackup(Addr address);
+    bool isDirinBackup(Addr address);
+    std::string getbkDirState(Addr address);
+    MachineID getSharerinBackup(Addr address);
+    AbstractCacheEntry* insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *entry);
+    void removeDirBk(Addr address);
+    void setDirState(Addr address, const std::string& state);
+    //Addr cacheProbetoBk(Addr address, AbstractCacheEntry *entry);
+    Addr cacheProbetoBk(Addr address);
+    void reviseIndex(Addr address);
+    //void updateSharerNum(Addr address, int sharersNum);
+
     // Print cache contents
     void print(std::ostream& out) const;
     void printData(std::ostream& out) const;
@@ -210,6 +223,9 @@ class CacheMemory : public SimObject
     int m_start_index_bit;
     bool m_resource_stalls;
     int m_block_size;
+
+    int m_cache_backup_entry;
+    int m_dir_tag_per_line;
 
     /**
      * We store all the ReplacementData in a 2-dimensional array. By doing

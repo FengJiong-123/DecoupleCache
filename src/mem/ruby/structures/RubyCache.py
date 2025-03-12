@@ -39,6 +39,8 @@ class RubyCache(SimObject):
     assoc = Param.Int("")
     expand = Param.Int(1,"")
     block_num = Param.Int(0,"")
+    cache_backup = Param.Int(0,"")
+    dir_tag_per_line = Param.Int(1,"")
     replacement_policy = Param.BaseReplacementPolicy(TreePLRURP(), "")
     new_replacement_policy = Param.Int(0, "")
     start_index_bit = Param.Int(6, "index start, default 6 for 64-byte line")

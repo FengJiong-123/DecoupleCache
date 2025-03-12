@@ -46,6 +46,7 @@ enumeration(CoherenceRequestType, desc="...") {
 
   EVC, desc="cache eviction";
   EVC_DIR, desc="directory eviction";
+  SW_DIR, desc="switch directory";
 }
 
 // CoherenceResponseType

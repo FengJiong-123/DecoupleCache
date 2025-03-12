@@ -368,11 +368,17 @@ NetworkInterface::checkStallQueue()
 bool
 NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
 {
+    DPRINTF(RubyNetwork, "flitisizeMessage::m_id=%d\n", m_id);
     Message *net_msg_ptr = msg_ptr.get();
+    assert(net_msg_ptr != nullptr);
     NetDest net_msg_dest = net_msg_ptr->getDestination();
 
     // gets all the destinations associated with this message.
     std::vector<NodeID> dest_nodes = net_msg_dest.getAllDest();
+    for (auto it = dest_nodes.begin(); it != dest_nodes.end(); it ++) {
+        DPRINTF(RubyNetwork, "flitisizeMessage::Message vnet:%d dest=%d\n",
+        vnet, *(it));
+    }
 
     // Number of flits is dependent on the link bandwidth available.
     // This is expressed in terms of bytes/cycle or the flit size
@@ -381,9 +387,9 @@ NetworkInterface::flitisizeMessage(MsgPtr msg_ptr, int vnet)
     int num_flits = (int)divCeil((float) m_net_ptr->MessageSizeType_to_int(
         net_msg_ptr->getMessageSize()), (float)oPort->bitWidth());
 
-    DPRINTF(RubyNetwork, "Message Size:%d vnet:%d bitWidth:%d\n",
-        m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize()),
-        vnet, oPort->bitWidth());
+    // DPRINTF(RubyNetwork, "Message Size:%d vnet:%d bitWidth:%d\n",
+    //     m_net_ptr->MessageSizeType_to_int(net_msg_ptr->getMessageSize()),
+    //     vnet, oPort->bitWidth());
 
     // loop to convert all multicast messages into unicast messages
     for (int ctr = 0; ctr < dest_nodes.size(); ctr++) {

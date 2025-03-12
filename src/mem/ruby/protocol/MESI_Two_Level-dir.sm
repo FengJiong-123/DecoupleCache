@@ -327,6 +327,7 @@ machine(MachineType:Directory, "MESI Two Level directory protocol")
   action(qf_queueMemoryFetchRequest, "qf", desc="Queue off-chip fetch request") {
     peek(requestNetwork_in, RequestMsg) {
       enqueue(memQueue_out, MemoryMsg, to_mem_ctrl_latency) {
+        DPRINTF(RubySlicc, "qf_queueMemoryFetchRequest::addr=%x\n", address);
         out_msg.addr := address;
         out_msg.Type := MemoryRequestType:MEMORY_READ;
         out_msg.Sender := in_msg.Requestor;

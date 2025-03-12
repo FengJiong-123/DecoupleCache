@@ -207,17 +207,6 @@ structure (DirectoryMemory, external = "yes") {
   void recordRequestType(DirectoryRequestType);
 }
 
-// structure (SnoopFilter, external = "yes") {
-//   AbstractCacheEntry lookup(Addr);
-//   bool allocate(Addr, AbstractCacheEntry);
-//   bool isPresent(Addr);
-//   void deallocate(Addr);
-//   Addr cacheProbe(Addr);
-//   void makeComplete(Addr);
-//   void makeInComplete(Addr);
-//   void setMRU(Addr);
-// }
-
 structure (CacheMemory, external = "yes") {
   bool cacheAvail(Addr);
   bool cacheFullbuthasPend(Addr);
@@ -231,6 +220,16 @@ structure (CacheMemory, external = "yes") {
   AbstractCacheEntry lookup(Addr);
   bool isTagPresent(Addr);
   bool isPendingAddr(Addr);
+  bool isFreetoBackup(Addr);
+  bool isDirinBackup(Addr);
+  std::string getbkDirState(Addr);
+  MachineID getSharerinBackup(Addr);
+  AbstractCacheEntry insertDirBk(Addr, MachineID, AbstractCacheEntry);
+  void removeDirBk(Addr);
+  void setDirState(Addr, std::string);
+  //Addr cacheProbetoBk(Addr, AbstractCacheEntry);
+  Addr cacheProbetoBk(Addr);
+  void reviseIndex(Addr);
   bool cacheBlock(Addr);
   Cycles getTagLatency();
   Cycles getDataLatency();

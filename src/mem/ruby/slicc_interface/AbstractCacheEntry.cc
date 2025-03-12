@@ -59,6 +59,8 @@ AbstractCacheEntry::AbstractCacheEntry() : ReplaceableEntry()
     m_htmInWriteSet = false;
     m_complete = false;
     m_waitEvict = false;
+    m_is_backup = false;
+    m_sharer_num= 0;
 }
 
 AbstractCacheEntry::~AbstractCacheEntry()
@@ -102,6 +104,19 @@ AbstractCacheEntry::isLocked(int context) const
     DPRINTF(RubyCache, "Testing Lock for addr: %#llx cur %d con %d\n",
             m_Address, m_locked, context);
     return m_locked == context;
+}
+
+void
+AbstractCacheEntry::insertDirBk(Addr address, MachineID sharer)
+{
+    DirInCacheEntry* new_dir_entry = new DirInCacheEntry{
+        .address = address,
+        .sharer = sharer,
+        .state = "NP",
+        .waitEvict = false,
+        .isBlocked = true
+    };
+    m_dir_bkup.push_back(new_dir_entry);
 }
 
 void

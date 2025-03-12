@@ -114,29 +114,29 @@ action(c_exclusiveReplacement, "c", desc="Send data to memory") {
     }
 }
 
-action(c_exclusiveCleanReplacement, "cc", desc="Send ack to memory for clean replacement") {
-    enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
-        DPRINTF(RubySlicc, "c_exclusiveCleanReplacement::addr=%x\n", address);
-        out_msg.addr := address;
-        out_msg.Type := CoherenceResponseType:ACK;
-        out_msg.Sender := machineID;
-        out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-        out_msg.MessageSize := MessageSizeType:Response_Control;
-    }
-}
+// action(c_exclusiveCleanReplacement, "cc", desc="Send ack to memory for clean replacement") {
+//     enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
+//         DPRINTF(RubySlicc, "c_exclusiveCleanReplacement::addr=%x\n", address);
+//         out_msg.addr := address;
+//         out_msg.Type := CoherenceResponseType:ACK;
+//         out_msg.Sender := machineID;
+//         out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+//         out_msg.MessageSize := MessageSizeType:Response_Control;
+//     }
+// }
 
-action(ct_exclusiveReplacementFromTBE, "ct", desc="Send data to memory") {
-    enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
-        assert(is_valid(tbe));
-        out_msg.addr := address;
-        out_msg.Type := CoherenceResponseType:MEMORY_DATA;
-        out_msg.Sender := machineID;
-        out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-        out_msg.DataBlk := tbe.DataBlk;
-        out_msg.Dirty := tbe.Dirty;
-        out_msg.MessageSize := MessageSizeType:Response_Data;
-    }
-}
+// action(ct_exclusiveReplacementFromTBE, "ct", desc="Send data to memory") {
+//     enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
+//         assert(is_valid(tbe));
+//         out_msg.addr := address;
+//         out_msg.Type := CoherenceResponseType:MEMORY_DATA;
+//         out_msg.Sender := machineID;
+//         out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+//         out_msg.DataBlk := tbe.DataBlk;
+//         out_msg.Dirty := tbe.Dirty;
+//         out_msg.MessageSize := MessageSizeType:Response_Data;
+//     }
+// }
 
 action(d_sendDataToRequestor, "d", desc="Send data from cache to reqeustor") {
     peek(L1RequestL2Network_in, RequestMsg) {
@@ -195,6 +195,31 @@ action(d_sendDataToRequestor, "d", desc="Send data from cache to reqeustor") {
                 out_msg.AckCount := 0 - dir_entry.Sharers.count();
             }
         }
+    }
+}
+
+action(dbk_sendDataToRequestorforBk, "dbk", desc="Send data from cache to reqeustor") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DPRINTF(RubySlicc, "dbk_sendDataToRequestorforBk::addr=%x, Type=%d\n"
+                         , address, in_msg.Type);
+        assert(is_valid(cache_entry));
+        assert(is_invalid(getDirEntry(address)));
+        enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
+            out_msg.addr := address;
+            if (in_msg.Type == CoherenceRequestType:GETX) {
+                out_msg.Type := CoherenceResponseType:DATA;
+            } else {
+                out_msg.Type := CoherenceResponseType:DATA_EXCLUSIVE;
+            }
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(in_msg.Requestor);
+            out_msg.DataBlk := cache_entry.DataBlk;
+            out_msg.Dirty := cache_entry.Dirty;
+            out_msg.MessageSize := MessageSizeType:Response_Data;
+        }
+        // remove cache entry for space to back up
+        L2cache.deallocate(address);
+        unset_cache_entry();
     }
 }
 
@@ -283,8 +308,8 @@ action(ex_sendExclusiveDataToGetSRequestors, "ex", desc="Send data from cache to
     assert(is_valid(tbe));
     assert(tbe.L1_GetS_IDs.count() == 1);
     enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
-        DirEntry dir_entry := getDirEntry(address);
-        assert(is_valid(dir_entry));
+        //DirEntry dir_entry := getDirEntry(address);
+        //assert(is_valid(dir_entry));
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:DATA_EXCLUSIVE;
         out_msg.Sender := machineID;
@@ -299,16 +324,16 @@ action(ex_sendExclusiveDataToGetSRequestors, "ex", desc="Send data from cache to
 action(ee_sendDataToGetXRequestor, "ee", desc="Send data from cache to GetX ID") {
     enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
         assert(is_valid(tbe));
-        DirEntry dir_entry := getDirEntry(address);
-        assert(is_valid(dir_entry));
+        //DirEntry dir_entry := getDirEntry(address);
+        //assert(is_valid(dir_entry));
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:DATA;
         out_msg.Sender := machineID;
         out_msg.Destination.add(tbe.L1_GetX_ID);
         out_msg.DataBlk := tbe.DataBlk;
+        out_msg.MessageSize := MessageSizeType:Response_Data;
         DPRINTF(RubySlicc, "ee_sendDataToGetXRequestor::addr=%x, Destination: %s, DataBlock: %s\n"
                          , out_msg.addr, out_msg.Destination, out_msg.DataBlk);
-        out_msg.MessageSize := MessageSizeType:Response_Data;
     }
 }
 
@@ -513,6 +538,7 @@ action(mr_writeDataToCacheFromRespond, "mrs", desc="Write data from response que
                 // TODO: MAY BE FAULT!!
             }
         } else {
+            DPRINTF(RubySlicc, "mr_writeDataToCacheFromRespond::do not allocate\n");
             cache_entry.DataBlk := in_msg.DataBlk;
             cache_entry.Dirty := in_msg.Dirty;
         }
@@ -627,6 +653,52 @@ action(qq_allocateDirBlock, "\qdir", desc="Set dir tag equal to tag of block B."
         SF.allocate(address, new DirEntry);
         SF.removePendingAddr(address);
     }
+}
+
+action(i_insertDirBk, "\ibk", desc="Insert dir tag to cache as back up.") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DPRINTF(RubySlicc, "i_insertDirBk::addr=%x, Requestor=%d\n"
+                         , address, in_msg.Requestor);
+        set_cache_entry(L2cache.insertDirBk(address, in_msg.Requestor, new CacheEntry));
+    }
+}
+
+action(s_switchDirBk, "\sbk", desc="switch dir tag from directory to cache as back up.") {
+    DirEntry dir_entry := getDirEntry(address);
+    assert(is_valid(dir_entry));
+    DPRINTF(RubySlicc, "s_switchDirBk::addr=%x, Requestor=%d, exclusive=%d\n"
+                     , address, dir_entry.Sharers, dir_entry.Exclusive);
+    assert(dir_entry.Sharers.count() == 1);
+    assert(dir_entry.Exclusive == dir_entry.Sharers.smallestElement());
+    set_cache_entry(L2cache.insertDirBk(address, dir_entry.Sharers.smallestElement(), new CacheEntry));
+}
+
+action(k_removeDirBk, "\kbk", desc="remove dir tag in cache as back up.") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        L2cache.removeDirBk(address);
+        unset_cache_entry();
+        State state := getState(tbe, cache_entry, address);
+        DPRINTF(RubySlicc, "k_removeDirBk::addr=%x, Requestor=%d, cacheline valid=%d, state=%d\n"
+                         , address, in_msg.Requestor, is_valid(cache_entry), state);
+    }
+}
+
+action(qk_allocateDirFromCache, "\qk", desc="allocate directory from cache.") {
+    assert(SF.cacheAvail(address));
+    assert(is_invalid(getDirEntry(address)));
+    assert(!SF.isTagPresent(address));
+    SF.allocate(address, new DirEntry);
+    SF.removePendingAddr(address);
+
+    DirEntry dir_entry := getDirEntry(address);
+    dir_entry.Exclusive := L2cache.getSharerinBackup(address);
+    addSharer(address, dir_entry.Exclusive, dir_entry);
+
+    L2cache.removeDirBk(address);
+    unset_cache_entry();
+    State state := getState(tbe, cache_entry, address);
+    DPRINTF(RubySlicc, "qk_allocateDirFromCache::addr=%x, exclusive=%d, cacheline valid=%d, state=%d\n"
+                     , address, dir_entry.Exclusive, is_valid(cache_entry), state);
 }
 
 action(rr_deallocateL2CacheBlock, "\r", desc="Deallocate L2 cache block.  Sets the cache to not present, allowing a replacement in parallel with a fetch.") {
@@ -825,7 +897,7 @@ action(mmd_markExclusiveFromDir, "\md", desc="set the exclusive owner") {
     dir_entry.Exclusive := dir_entry.Sharers.smallestElement();
     //addSharer(address, in_msg.Sender, dir_entry);
     DPRINTF(RubySlicc, "mmd_markExclusiveFromDir::addr=%x, exclusive=%d\n"
-                        , address, dir_entry.Exclusive);
+                     , address, dir_entry.Exclusive);
 }
 
 action(mmu_markExclusiveFromUnblock, "\mu", desc="set the exclusive owner") {
@@ -839,6 +911,26 @@ action(mmu_markExclusiveFromUnblock, "\mu", desc="set the exclusive owner") {
         dir_entry.Exclusive := in_msg.Sender;
         addSharer(address, in_msg.Sender, dir_entry);
     }
+}
+
+action(sts_setBkStateISS, "\stsISS", desc="set back up state as ISS") {
+    DPRINTF(RubySlicc, "sts_setBkStateISS::addr=%x\n", address);
+    L2cache.setDirState(address, "ISS");
+}
+
+action(sts_setBkStateIM, "\stsIM", desc="set back up state as IM") {
+    DPRINTF(RubySlicc, "sts_setBkStateIM::addr=%x\n", address);
+    L2cache.setDirState(address, "IM");
+}
+
+action(sts_setBkStateMTMB, "\stsMTMB", desc="set back up state as MT_MB") {
+    DPRINTF(RubySlicc, "sts_setBkStateMTTB::addr=%x\n", address);
+    L2cache.setDirState(address, "MT_MB");
+}
+
+action(sts_setBkStateMT, "\stsMT", desc="set back up state as MT") {
+    DPRINTF(RubySlicc, "sts_setBkStateMT::addr=%x\n", address);
+    L2cache.setDirState(address, "MT");
 }
 
 action(rrf_removeCacheEvictFlag, "\rrf", desc="remove cache evict flag when state is I_I") {
@@ -875,19 +967,19 @@ action(kd_wakeUpDependents, "kd", desc="wake-up dependents") {
 //===============================================
 // BASE STATE - I
 
-transition({M_I, MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
+transition({M_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
            {L1_PUTX_front, L1_PUTX_end, L1_PUTX_clean}){
     zz_stallAndWaitL1RequestQueue;
 }
 
-transition({MT,M,NP}, Pend){
+transition({MT,M,NP,BK}, Pend){
     zz_stallAndWaitL1RequestQueue;
 }
 
 transition({NP,M,M_I,S_I,I_I}, Pop_ReqIn){
 }
 
-transition({MT_I, MCT_I, I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
+transition({I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
            {SF_Replacement_withC, SF_Replacement}){
     zzt_stallAndWaitTriggerQueue;
 }
@@ -896,14 +988,24 @@ transition({NP, SS, M, MT}, L1_PUTX_front) {
     mr_writeDataToCacheFromRequest;
 }
 
+transition(BK, L1_PUTX_front_BK, M) {
+    k_removeDirBk;
+    //TODO: solve problems when back up 
+    // directory in cache has more than
+    // one sharer
+    mr_writeDataToCacheFromRequest;
+    // remove directory will debound address
+    // and back up cache line. However, cache
+    // will allocate L1 victim data and form
+    // a new cache line, therefore we need to
+    // switch state to M
+}
+
 transition({NP, SS, M, MT}, L1_PUTX_end, M) {
-    // ll_clearSharers;
     kk_removeRequestSharer;
     // for directory sharers has been clean,
     // we drop directory entry here.
     t_sendWBAck;
-    // mark dirty
-    // mcd_markCacheDirty;
     jj_popL1RequestQueue;
     jjt_popTriggerPort;
     kd_wakeUpDependents;
@@ -960,6 +1062,13 @@ transition({SS,MT}, L1_PUTX_clean_toNP, NP) {
     kd_wakeUpDependents;
 }
 
+transition(BK, L1_PUTX_clean_BK) {
+    k_removeDirBk;
+    t_sendWBAck;
+    jj_popL1RequestQueue;
+    kd_wakeUpDependents;
+}
+
 transition({SS,M,MT}, L2_Replacement, M_I) {
     i_allocateTBE;
     c_exclusiveReplacement;
@@ -1008,20 +1117,20 @@ transition({M,MT,SS}, SF_Replacement_withC, S_I) {
     jjt_popTriggerPort;
 }
 
+transition(MT, SF_Switch, BK) {
+    // directory switch to cache
+    s_switchDirBk;
+    sts_setBkStateMT;
+    rr_deallocateDirBlock;
+    jjt_popTriggerPort;
+}
+
 transition({I_I, S_I}, Ack) {
     q_updateAck;
     // collect data to tbe
     qq_writeDataToTBE;
     o_popIncomingResponseQueue;
 }
-
-// transition({I_I,S_I}, WB_Data, S_I) {
-//     q_updateAck;
-//     //mr_writeDataToCacheFromRespond;
-//     uu_profileBIDirty;
-//     //rp_removeCachePendingAddr;
-//     o_popIncomingResponseQueue;
-// }
 
 transition(I_I, WB_Data_Keep) {
     q_updateAck;
@@ -1074,11 +1183,12 @@ transition({IM, IS, ISS, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, MEM_Inv) {
     zn_recycleResponseNetwork;
 }
 
-transition({I_I, S_I, M_I, MT_I, MCT_I, NP}, MEM_Inv) {
+transition({I_I, S_I, M_I, NP}, MEM_Inv) {
     o_popIncomingResponseQueue;
 }
 
-transition({SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, {L1_GETS, L1_GET_INSTR, L1_GETX, L1_UPGRADE}) {
+transition({SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB}, {L1_GETX, L1_UPGRADE, L1_GETS, L1_GET_INSTR,
+                                                  L1_GETX_BK, L1_GETS_BK, L1_GET_INSTR_BK}) {
     zz_stallAndWaitL1RequestQueue;
 }
 
@@ -1089,6 +1199,16 @@ transition(NP, {L1_GETS, L1_GET_INSTR},  ISS) {
     nn_addSharer;
     i_allocateTBE;
     ss_recordGetSL1ID;
+    a_issueFetchToMemory;
+    uu_profileMiss;
+    jj_popL1RequestQueue;
+}
+
+transition(NP, {L1_GETS_BK, L1_GET_INSTR_BK}, BK) {
+    i_insertDirBk;
+    i_allocateTBE;
+    ss_recordGetSL1ID;
+    sts_setBkStateISS;
     a_issueFetchToMemory;
     uu_profileMiss;
     jj_popL1RequestQueue;
@@ -1106,11 +1226,30 @@ transition(NP, L1_GETX, IM) {
     jj_popL1RequestQueue;
 }
 
+transition(NP, L1_GETX_BK, BK) {
+    i_insertDirBk;
+    i_allocateTBE;
+    xx_recordGetXL1ID;
+    sts_setBkStateIM;
+    a_issueFetchToMemory;
+    uu_profileMiss;
+    jj_popL1RequestQueue;
+}
 
 // transitions from IS/IM
 transition(ISS, Mem_Data, MT_MB) {
     m_allocDataFromMem;
     ex_sendExclusiveDataToGetSRequestors;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+}
+
+// transitions from IS/IM
+transition(BK, Mem_Data_ISS) {
+    // directory is in cache line as back up
+    m_allocDataFromMem;
+    ex_sendExclusiveDataToGetSRequestors;
+    sts_setBkStateMTMB;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
 }
@@ -1130,6 +1269,15 @@ transition(IS, Mem_Data, SS) {
 transition(IM, Mem_Data, MT_MB) {
     m_allocDataFromMem;
     ee_sendDataToGetXRequestor;
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+}
+
+transition(BK, Mem_Data_IM) {
+    // directory is in cache line as back up
+    m_allocDataFromMem;
+    ee_sendDataToGetXRequestor;
+    sts_setBkStateMTMB;
     s_deallocateTBE;
     o_popIncomingResponseQueue;
 }
@@ -1210,6 +1358,16 @@ transition(M, L1_GETS, MT_MB) {
     jj_popL1RequestQueue;
 }
 
+transition(M, {L1_GETS_BK, L1_GETX_BK}, BK) {
+    dbk_sendDataToRequestorforBk;
+    //rr_deallocateL2CacheBlock;
+    i_insertDirBk;
+    sts_setBkStateMTMB;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+}
+
 transition({SS,M,MT},  MEM_Inv, M_I) {
     i_allocateTBE;
     c_exclusiveReplacement;
@@ -1233,9 +1391,33 @@ transition(MT, {L1_GETS, L1_GET_INSTR}, MT_IIB) {
     jj_popL1RequestQueue;
 }
 
+transition(BK, L1_GETX_BK, MT_MB) {
+    qk_allocateDirFromCache;
+    b_forwardRequestToExclusive;
+    uu_profileMiss;
+    set_setMRU;
+    jj_popL1RequestQueue;
+}
+
+transition(BK, {L1_GETS_BK, L1_GET_INSTR_BK}, MT_IIB) {
+    qk_allocateDirFromCache;
+    b_forwardRequestToExclusive;
+    c_checkCache; // need to check cache allovcation
+    uu_profileMiss;
+    set_setMRU;
+    jj_popL1RequestQueue;
+}
+
 transition({SS_MB,MT_MB,MT_IIB}, Exclusive_Unblock, MT) {
     // update actual directory
     mmu_markExclusiveFromUnblock;
+    k_popUnblockQueue;
+    kd_wakeUpDependents;
+}
+
+transition(BK, Exclusive_Unblock) {
+    // update directory in cache line
+    sts_setBkStateMT;
     k_popUnblockQueue;
     kd_wakeUpDependents;
 }
@@ -1277,7 +1459,8 @@ transition(MT_SB, Unblock_Keep) {
 }
 
 // writeback states
-transition({I_I, S_I, MT_I, MCT_I, M_I}, {L1_GETX, L1_UPGRADE, L1_GETS, L1_GET_INSTR}) {
+transition({I_I, S_I, M_I}, {L1_GETX, L1_UPGRADE, L1_GETS, L1_GET_INSTR,
+                             L1_GETX_BK, L1_GETS_BK, L1_GET_INSTR_BK}) {
     zz_stallAndWaitL1RequestQueue;
 }
 

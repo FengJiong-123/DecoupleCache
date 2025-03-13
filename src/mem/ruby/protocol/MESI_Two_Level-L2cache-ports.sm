@@ -108,6 +108,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     L1_GETS_withC,           desc="GETS request hit cache entry";
     L1_GETX,                 desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE,              desc="a L1D GETX request for a block maped to us";
+    L1_UPGRADE_BK,           desc="a L1D GETX request for a block maped to us";
 
     L1_GET_INSTR_BK,         desc="a L1I GET INSTR request for a block maped to us, bk";
     L1_GETS_BK,              desc="a L1D GETS request for a block maped to us, bk";
@@ -420,6 +421,8 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
       } else {
         return Event:L1_PUTX_clean_BK;
       }
+    } else if (type == CoherenceRequestType:UPGRADE) {
+      return Event:L1_UPGRADE_BK;
     } else {
       DPRINTF(RubySlicc, "address: %#x, Request Type: %s\n", addr, type);
       error("Invalid L1 forwarded request type");
@@ -724,10 +727,11 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         } else if (L2cache.isDirinBackup(in_msg.addr)) {
           // directory access hit in cache
           // needs to receive dir tag in dir
-          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d\n"
-                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty);
+          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d, backupstate=%s, backupsharer=%d\n"
+                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty, L2cache.getbkDirState(in_msg.addr), L2cache.getSharerinBackup(in_msg.addr));
           assert(state == State:BK);
           if (in_msg.Type == CoherenceRequestType:PUTX || 
+              in_msg.Type == CoherenceRequestType:UPGRADE ||
              (SF.cacheAvail(in_msg.addr) && L2cache.getSharerinBackup(in_msg.addr) != in_msg.Requestor)) {
             
             if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr))) {
@@ -762,14 +766,39 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                              , in_msg.addr, state, victim, victim_state, is_valid(L2cache_entry));
 
             if (dir_victim_entry.Sharers.count() == 1 && is_invalid(L2cache_entry) && L2cache.isFreetoBackup(victim)) {
-              // directory has only one sharers, so that we switch it
-              // to cache as back up
-              enqueue(triggerOutPort, RequestMsg, 0) {
-                out_msg.addr := victim;
-                out_msg.Type := CoherenceRequestType:SW_DIR;
+              // directory has only one sharers, so that we switch it to cache as back up
+              // may need cache evict for the directory entry switched
+              Addr cache_victim := L2cache.cacheProbetoBk(victim);
+              if (cache_victim == -1) {
+                enqueue(triggerOutPort, RequestMsg, 0) {
+                  out_msg.addr := victim;
+                  out_msg.Type := CoherenceRequestType:SW_DIR;
+                }
+                // set MRU to prevent this address being evicted twice
+                SF.setMRU(victim);
+
+              } else {
+                // assert(false);
+                CacheEntry L2cache_entry_victim := getCacheEntry(cache_victim);
+                assert(is_valid(L2cache_entry_victim));
+                TBE cache_tbe_victim := TBEs[cache_victim];
+                State cache_victim_state := getState(cache_tbe_victim, L2cache_entry_victim, cache_victim);
+                DPRINTF(RubySlicc, "L1RequestL2Network_in::directory switch creates cache eviction::victim addr=%x, victim state=%d\n"
+                                , cache_victim, cache_victim_state);
+                enqueue(triggerOutPort, RequestMsg, 0) {
+                  out_msg.addr := cache_victim;
+                  out_msg.Type := CoherenceRequestType:EVC;
+                  out_msg.AccessMode := in_msg.AccessMode;
+                  out_msg.MessageSize := in_msg.MessageSize;
+                  out_msg.DataBlk := L2cache_entry_victim.DataBlk;
+                  out_msg.Dirty := L2cache_entry_victim.Dirty;
+                  out_msg.Len := 1;
+                }
+                if (cache_victim_state != State:SS && cache_victim_state != State:M && 
+                    cache_victim_state != State:MT && cache_victim_state != State:S_I) {
+                  assert(false);
+                }
               }
-              // set MRU to prevent this address being evicted twice
-              SF.setMRU(victim);
 
             } else {
               // directory eviction
@@ -805,7 +834,14 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                                                   state, cache_entry),
                     in_msg.addr, cache_entry, tbe);
 
-          } else if (L2cache.isFreetoBackup(in_msg.addr)) { 
+          } else if (L2cache.isFreetoBackup(in_msg.addr)) {
+            // but PUTX doesnot need to allocate directory
+            if (in_msg.Type == CoherenceRequestType:PUTX) {
+              trigger(L1Cache_request_type_to_event(in_msg.Type, in_msg.addr,
+                                                    in_msg.Requestor, dir_entry, in_msg.Dirty,
+                                                    state, cache_entry),
+                      in_msg.addr, cache_entry, tbe);
+            }
             // cache back
             // Addr cache_victim := L2cache.cacheProbetoBk(in_msg.addr, new CacheEntry);
             Addr cache_victim := L2cache.cacheProbetoBk(in_msg.addr);
@@ -818,7 +854,26 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                                                   state, cache_entry),
                       in_msg.addr, cache_entry, tbe);
             }
-            assert(false);//TODO: evict cache line
+            // assert(false);//TODO: evict cache line
+            CacheEntry L2cache_entry := getCacheEntry(cache_victim);
+            assert(is_valid(L2cache_entry));
+            TBE tbe_victim := TBEs[cache_victim];
+            State victim_state := getState(tbe_victim, L2cache_entry, cache_victim);
+            DPRINTF(RubySlicc, "L1RequestL2Network_in::directory backup creates cache eviction::victim addr=%x, victim state=%d\n"
+                             , cache_victim, victim_state);
+            enqueue(triggerOutPort, RequestMsg, 0) {
+              out_msg.addr := cache_victim;
+              out_msg.Type := CoherenceRequestType:EVC;
+              out_msg.AccessMode := in_msg.AccessMode;
+              out_msg.MessageSize := in_msg.MessageSize;
+              out_msg.DataBlk := L2cache_entry.DataBlk;
+              out_msg.Dirty := L2cache_entry.Dirty;
+              out_msg.Len := 1;
+            }
+            if (victim_state != State:SS && victim_state != State:M && 
+                victim_state != State:MT && victim_state != State:S_I) {
+              assert(false);
+            }
 
           } else {
             // No room in the SF, so we need to make room before handling the request

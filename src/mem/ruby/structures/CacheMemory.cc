@@ -819,28 +819,32 @@ bool
 CacheMemory::isFreetoBackup(Addr address) {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
-    DPRINTF(RubyCache, "isFreetoBackup::addr=%x, set=%x, pending size=%d\n"
-                     , address, cacheSet, m_set_pending_addr[cacheSet].size());
     if (m_cache_backup_entry == 0) {
         return false;
     }
 
     // get back up entry number
     int backup_entry = 0;
+    int free_entry = 0;
     for (int i = 0; i < m_cache_assoc; i ++) {
         if (m_cache[cacheSet][i] == NULL) {
+            free_entry ++;
             continue;
         }
         if (m_cache[cacheSet][i]->m_is_backup) {
             backup_entry ++;
             assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
             if (m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
+                DPRINTF(RubyCache, "isFreetoBackup::backup entry existed::addr=%x, set=%x, pending size=%d\n"
+                                 , address, cacheSet, m_set_pending_addr[cacheSet].size());
                 return true;
             }
         }
     }
     assert(backup_entry <= m_cache_backup_entry);
-    return (backup_entry < m_cache_backup_entry);
+    DPRINTF(RubyCache, "isFreetoBackup::need allocate a new entry::addr=%x, set=%x, pending size=%d, free entry=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size(), free_entry);
+    return (backup_entry < m_cache_backup_entry && free_entry > m_set_pending_addr[cacheSet].size());
 }
 
 bool
@@ -933,8 +937,9 @@ CacheMemory::insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *ent
             insert_pos = i;
             continue;
         }
-        DPRINTF(RubyCache, "insertDirBk::pos=%d, m_is_backup=%d, dir size=%d\n"
-                         , i, m_cache[cacheSet][i]->m_is_backup, m_cache[cacheSet][i]->m_dir_bkup.size());
+        DPRINTF(RubyCache, "insertDirBk::pos=%d, posaddr=%x, m_is_backup=%d, dir size=%d\n"
+                         , i, m_cache[cacheSet][i]->m_Address, m_cache[cacheSet][i]->m_is_backup
+                         , m_cache[cacheSet][i]->m_dir_bkup.size());
         if (m_cache[cacheSet][i]->m_is_backup) {
             // count back entry
             back_entry ++;

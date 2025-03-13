@@ -669,7 +669,7 @@ action(s_switchDirBk, "\sbk", desc="switch dir tag from directory to cache as ba
     DPRINTF(RubySlicc, "s_switchDirBk::addr=%x, Requestor=%d, exclusive=%d\n"
                      , address, dir_entry.Sharers, dir_entry.Exclusive);
     assert(dir_entry.Sharers.count() == 1);
-    assert(dir_entry.Exclusive == dir_entry.Sharers.smallestElement());
+    //assert(dir_entry.Exclusive == dir_entry.Sharers.smallestElement());
     set_cache_entry(L2cache.insertDirBk(address, dir_entry.Sharers.smallestElement(), new CacheEntry));
 }
 
@@ -798,6 +798,21 @@ action(ts_sendInvAckToUpgrader, "ts", desc="Send ACK to upgrader") {
             out_msg.MessageSize := MessageSizeType:Response_Control;
             // upgrader doesn't get ack from itself, hence the + 1
             out_msg.AckCount := 0 - dir_entry.Sharers.count() + 1;
+        }
+    }
+}
+
+action(ts_sendInvAckToUpgraderBk, "tsbk", desc="Send ACK to upgrader when cache line in back up") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
+            DPRINTF(RubySlicc, "ts_sendInvAckToUpgraderBk::addr=%x, requestor=%d\n"
+                             , address, in_msg.Requestor);
+            assert(L2cache.getSharerinBackup(address) == in_msg.Requestor);
+            out_msg.addr := address;
+            out_msg.Type := CoherenceResponseType:ACK;
+            out_msg.Sender := machineID;
+            out_msg.Destination.add(in_msg.Requestor);
+            out_msg.MessageSize := MessageSizeType:Response_Control;
         }
     }
 }
@@ -1117,7 +1132,7 @@ transition({M,MT,SS}, SF_Replacement_withC, S_I) {
     jjt_popTriggerPort;
 }
 
-transition(MT, SF_Switch, BK) {
+transition({MT,M_I,SS}, SF_Switch, BK) {
     // directory switch to cache
     s_switchDirBk;
     sts_setBkStateMT;
@@ -1336,6 +1351,14 @@ transition({SS,M,MT}, L1_UPGRADE, SS_MB) {
     jj_popL1RequestQueue;
 }
 
+transition(BK, L1_UPGRADE_BK) {
+    ts_sendInvAckToUpgraderBk;
+    sts_setBkStateMT;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+}
+
 transition(M, L1_GETX, MT_MB) {
     d_sendDataToRequestor;
     set_setMRU;
@@ -1465,6 +1488,12 @@ transition({I_I, S_I, M_I}, {L1_GETX, L1_UPGRADE, L1_GETS, L1_GET_INSTR,
 }
 
 transition(M_I, Mem_Ack, NP) {
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+}
+
+transition(BK, Mem_Ack) {
     s_deallocateTBE;
     o_popIncomingResponseQueue;
     kd_wakeUpDependents;

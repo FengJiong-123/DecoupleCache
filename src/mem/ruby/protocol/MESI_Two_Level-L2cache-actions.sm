@@ -206,7 +206,8 @@ action(dbk_sendDataToRequestorforBk, "dbk", desc="Send data from cache to reqeus
         assert(is_invalid(getDirEntry(address)));
         enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
             out_msg.addr := address;
-            if (in_msg.Type == CoherenceRequestType:GETX) {
+            if (in_msg.Type == CoherenceRequestType:GETX || 
+                in_msg.Type == CoherenceRequestType:UPGRADE) {
                 out_msg.Type := CoherenceResponseType:DATA;
             } else {
                 out_msg.Type := CoherenceResponseType:DATA_EXCLUSIVE;
@@ -1381,7 +1382,7 @@ transition(M, L1_GETS, MT_MB) {
     jj_popL1RequestQueue;
 }
 
-transition(M, {L1_GETS_BK, L1_GETX_BK}, BK) {
+transition(M, {L1_GETS_BK, L1_GETX_BK, L1_UPGRADE_BK}, BK) {
     dbk_sendDataToRequestorforBk;
     //rr_deallocateL2CacheBlock;
     i_insertDirBk;
@@ -1483,7 +1484,7 @@ transition(MT_SB, Unblock_Keep) {
 
 // writeback states
 transition({I_I, S_I, M_I}, {L1_GETX, L1_UPGRADE, L1_GETS, L1_GET_INSTR,
-                             L1_GETX_BK, L1_GETS_BK, L1_GET_INSTR_BK}) {
+                             L1_GETX_BK, L1_GETS_BK, L1_GET_INSTR_BK, L1_UPGRADE_BK}) {
     zz_stallAndWaitL1RequestQueue;
 }
 
@@ -1499,9 +1500,16 @@ transition(BK, Mem_Ack) {
     kd_wakeUpDependents;
 }
 
-transition({S_I,NP,M,MT,MT_MB,ISS,IM,IS}, Mem_Ack) {
+transition(BK, Mem_Ack_No_deallocTBE) {
+    o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+}
+
+transition({S_I,NP,M,MT,MT_MB,ISS,IM,IS,SS}, Mem_Ack) {
     // this is for cache eviction but
     // encouters SF eviction
+    // SS is that tbe has been deallocate,
+    // so that pop queue directly
     o_popIncomingResponseQueue;
 }
 

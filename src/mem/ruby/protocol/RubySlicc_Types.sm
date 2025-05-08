@@ -249,11 +249,14 @@ structure (CacheMemory, external = "yes") {
   int getNumBlocks();
   Addr getAddressAtIdx(int);
 
+  void profileForwardinl0();
+  void profileForwardinl1();
   void profileDemandHit();
   void profileDemandMiss();
   void profilePrefetchHit();
   void profilePrefetchMiss();
   void profileEvictions();
+  void profileEvictionfromRepair();
   void profileBIDirty();
   void profileEvictionsType(int);
   void profileRemainedEntry(Addr);

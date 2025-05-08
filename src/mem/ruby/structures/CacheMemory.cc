@@ -1189,7 +1189,12 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
       ADD_STAT(m_prefetch_accesses, "Number of cache prefetch accesses",
                m_prefetch_hits + m_prefetch_misses),
       ADD_STAT(m_accessModeType, ""),
+      ADD_STAT(m_forward_getss_in_l0, "Number of forward getS in L1, data in l0 and l1"),
+      ADD_STAT(m_forward_getss_in_l1, "Number of forward getS in L1, data in l1"),
+    //   ADD_STAT(m_forward_getss, "Number of forward getS in L1",
+    //            m_forward_getss_in_l0 + m_forward_getss_in_l1),
       ADD_STAT(m_evictions, "Number of evictions"),
+      ADD_STAT(m_eviction_from_repair, "Number of eviction from directory repair"),
       ADD_STAT(m_evict_putx, "Number of evictions from PUTX"),
       ADD_STAT(m_evict_dir_evict, "Number of evictions from directory eviction"),
       ADD_STAT(m_evict_dir_evict_dirty, "Number of evictions from directory eviction and is dirty"),
@@ -1256,6 +1261,15 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
         .flags(statistics::nozero);
 
     m_prefetch_accesses
+        .flags(statistics::nozero);
+
+    // m_forward_getss
+    //     .flags(statistics::nozero);
+
+    m_forward_getss_in_l0
+        .flags(statistics::nozero);
+
+    m_forward_getss_in_l1
         .flags(statistics::nozero);
 
     m_accessModeType
@@ -1427,6 +1441,18 @@ CacheMemory::htmCommitTransaction()
 }
 
 void
+CacheMemory::profileForwardinl0()
+{
+    cacheMemoryStats.m_forward_getss_in_l0++;
+}
+
+void
+CacheMemory::profileForwardinl1()
+{
+    cacheMemoryStats.m_forward_getss_in_l1++;
+}
+
+void
 CacheMemory::profileDemandHit()
 {
     cacheMemoryStats.m_demand_hits++;
@@ -1454,6 +1480,12 @@ void
 CacheMemory::profileEvictions()
 {
     cacheMemoryStats.m_evictions++;
+}
+
+void
+CacheMemory::profileEvictionfromRepair()
+{
+    cacheMemoryStats.m_eviction_from_repair++;
 }
 
 void

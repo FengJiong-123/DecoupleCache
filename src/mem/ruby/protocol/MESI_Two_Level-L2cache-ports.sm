@@ -142,6 +142,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     Mem_Ack,                 desc="ack from memory to NP", format="!r";
     Mem_Ack_MT,              desc="ack from memory to MT", format="!r";
     Mem_Ack_SS,              desc="ack from memory to SS", format="!r";
+    Mem_Ack_No_deallocTBE,   desc="ack from memory to BK", format="!r";
 
     // M->S data writeback
     WB_Data,                 desc="data from L1";
@@ -602,6 +603,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                 trigger(Event:Mem_Ack_SS, in_msg.addr, cache_entry, tbe);
               }
             }
+            if (state == State:BK && (L2cache.getbkDirState(in_msg.addr) == "ISS" ||
+                                      L2cache.getbkDirState(in_msg.addr) == "IM")) {
+              trigger(Event:Mem_Ack_No_deallocTBE, in_msg.addr, cache_entry, tbe);
+            }
             trigger(Event:Mem_Ack, in_msg.addr, cache_entry, tbe);
           } else if(in_msg.Type == CoherenceResponseType:INV) {
             trigger(Event:MEM_Inv, in_msg.addr, cache_entry, tbe);
@@ -812,6 +817,8 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               }
               // set MRU to prevent this address being evicted twice
               SF.setMRU(victim);
+              // profile eviction from repair
+              SF.profileEvictionfromRepair();
             }
           }
 

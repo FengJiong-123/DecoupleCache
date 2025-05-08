@@ -385,10 +385,13 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         //         trigger(Event:Fwd_GETX_NDB, in_msg.addr, cache_entry, tbe);
         //     }
         } else if (in_msg.Type == CoherenceRequestType:GETS) {
+            cache.profileRemainedEntry(in_msg.addr);
             if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
+                cache.profileForwardinl0();
                 trigger(Event:L0_Invalidate_Else, in_msg.addr,
                         cache_entry, tbe);
             } else {
+                cache.profileForwardinl1();
                 trigger(Event:Fwd_GETS, in_msg.addr, cache_entry, tbe);
             }
         } else {
@@ -404,8 +407,9 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
       peek(messageBufferFromL0_in, CoherenceMsg) {
         Entry cache_entry := getCacheEntry(in_msg.addr);
         TBE tbe := TBEs[in_msg.addr];
-        DPRINTF(RubySlicc, "messageBufferFromL0_in::addr=%x, class=%d, cache valid=%d\n"
-                         , in_msg.addr, in_msg.Class, is_valid(cache_entry));
+        State state := getState(tbe, cache_entry, in_msg.addr);
+        DPRINTF(RubySlicc, "messageBufferFromL0_in::addr=%x, class=%d, cache valid=%d, state=%d\n"
+                         , in_msg.addr, in_msg.Class, is_valid(cache_entry), state);
 
         if(in_msg.Class == CoherenceClass:INV_DATA) {
             trigger(Event:L0_DataAck, in_msg.addr, cache_entry, tbe);

@@ -275,7 +275,13 @@ class CacheMemory : public SimObject
 
           statistics::Vector m_accessModeType;
 
+          // counters for L1cache state
+          //statistics::Formula m_forward_getss;
+          statistics::Scalar m_forward_getss_in_l0;
+          statistics::Scalar m_forward_getss_in_l1;
+
           statistics::Scalar m_evictions;
+          statistics::Scalar m_eviction_from_repair;
 
           // counters for cache eviction types
           statistics::Scalar m_evict_putx;
@@ -302,11 +308,14 @@ class CacheMemory : public SimObject
     public:
       // These function increment the number of demand hits/misses by one
       // each time they are called
+      void profileForwardinl0();
+      void profileForwardinl1();
       void profileDemandHit();
       void profileDemandMiss();
       void profilePrefetchHit();
       void profilePrefetchMiss();
       void profileEvictions();
+      void profileEvictionfromRepair();
       void profileBIDirty();
       void profileEvictionsType(int type);
       void profileRemainedEntry(Addr address);

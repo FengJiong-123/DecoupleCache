@@ -610,6 +610,19 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
     cache_entry.Dirty := false;
   }
 
+  action(f_sendShareDataToL1, "fsd", desc="Send forwarding shared data to the L1 cache") {
+    enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
+      assert(is_valid(cache_entry));
+      out_msg.addr := address;
+      out_msg.Class := CoherenceClass:SHARE_DATA;
+      out_msg.DataBlk := cache_entry.DataBlk;
+      out_msg.Dirty := cache_entry.Dirty;
+      out_msg.Sender := machineID;
+      out_msg.Dest := createMachineID(MachineType:L1Cache, version);
+      out_msg.MessageSize := MessageSizeType:Writeback_Data;
+    }
+  }
+
   action(fi_sendInvAck, "fi", desc="Send data to the L1 cache") {
     peek(messgeBuffer_in, CoherenceMsg) {
       enqueue(requestNetwork_out, CoherenceMsg, response_latency) {
@@ -909,7 +922,7 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
     k_popMandatoryQueue;
   }
 
-  transition({I, IS, IM, Inst_IS}, {InvOwn, InvElse}) {
+  transition({I, IS, IM, Inst_IS}, {InvOwn, InvElse, Fwd_GETS}) {
     forward_eviction_to_cpu;
     fi_sendInvAck;
     l_popRequestQueue;
@@ -978,7 +991,8 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
   }
 
   transition(E, {Fwd_GETS, Fwd_GET_INSTR}, S) {
-    f_sendDataToL1;
+    forward_eviction_to_cpu;
+    f_sendShareDataToL1;
     l_popRequestQueue;
   }
 
@@ -997,7 +1011,8 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
   }
 
   transition(M, {Fwd_GETS, Fwd_GET_INSTR}, S) {
-    f_sendDataToL1;
+    forward_eviction_to_cpu;
+    f_sendShareDataToL1;
     l_popRequestQueue;
   }
 

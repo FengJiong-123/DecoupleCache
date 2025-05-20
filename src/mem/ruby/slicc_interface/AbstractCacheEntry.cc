@@ -107,14 +107,15 @@ AbstractCacheEntry::isLocked(int context) const
 }
 
 void
-AbstractCacheEntry::insertDirBk(Addr address, MachineID sharer)
+AbstractCacheEntry::insertDirBk(Addr address, MachineID owner)
 {
     DirInCacheEntry* new_dir_entry = new DirInCacheEntry{
         .address = address,
-        .sharer = sharer,
+        .owner = owner,
         .state = "NP",
         .waitEvict = false,
-        .isBlocked = true
+        .isBlocked = true,
+        .backupL2 = false
     };
     m_dir_bkup.push_back(new_dir_entry);
 }

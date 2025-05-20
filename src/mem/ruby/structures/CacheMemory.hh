@@ -94,6 +94,7 @@ class CacheMemory : public SimObject
     //   a) a tag match on this address or there is
     //   b) an unused line in the same cache "way"
     bool cacheAvail(Addr address) const;
+    bool isBackupButCacheFull(Addr address);
     bool cacheFullbuthasPend(Addr address);
     bool cachehasOtherPend(Addr address, MachineID requestor);
 
@@ -157,8 +158,9 @@ class CacheMemory : public SimObject
     bool isFreetoBackup(Addr address);
     bool isDirinBackup(Addr address);
     std::string getbkDirState(Addr address);
-    MachineID getSharerinBackup(Addr address);
-    AbstractCacheEntry* insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *entry);
+    bool isDirBackupL2(Addr address);
+    MachineID getOwnerinBackup(Addr address);
+    AbstractCacheEntry* insertDirBk(Addr address, MachineID owner, AbstractCacheEntry *entry);
     void removeDirBk(Addr address);
     void setDirState(Addr address, const std::string& state);
     //Addr cacheProbetoBk(Addr address, AbstractCacheEntry *entry);
@@ -204,7 +206,10 @@ class CacheMemory : public SimObject
     // The second index is the the amount associativity.
     std::unordered_map<Addr, int> m_tag_index;
     std::vector<std::vector<AbstractCacheEntry*> > m_cache;
+    // pending for LLC
     std::vector<std::unordered_map<Addr, MachineID>> m_set_pending_addr;
+    // sharing for L2
+    std::vector<std::unordered_map<Addr, MachineID>> m_set_sharing_addr;
 
     /** We use the replacement policies from the Classic memory system. */
     replacement_policy::Base *m_replacementPolicy_ptr;
@@ -265,7 +270,9 @@ class CacheMemory : public SimObject
           statistics::Histogram htmTransAbortReadSet;
           statistics::Histogram htmTransAbortWriteSet;
 
-          statistics::Scalar m_demand_hits;
+          statistics::Scalar m_demand_hits_in_dir;
+          statistics::Scalar m_demand_hits_in_cache;
+          statistics::Scalar m_demand_hits_recover;
           statistics::Scalar m_demand_misses;
           statistics::Formula m_demand_accesses;
 
@@ -311,6 +318,7 @@ class CacheMemory : public SimObject
       void profileForwardinl0();
       void profileForwardinl1();
       void profileDemandHit();
+      void profileDemandHitCache(bool need_recover);
       void profileDemandMiss();
       void profilePrefetchHit();
       void profilePrefetchMiss();

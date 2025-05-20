@@ -110,6 +110,7 @@ CacheMemory::init()
     replacement_data.resize(m_cache_num_sets,
                                std::vector<ReplData>(m_cache_assoc, nullptr));
     m_set_pending_addr.resize(m_cache_num_sets);
+    m_set_sharing_addr.resize(m_cache_num_sets);
     // instantiate all the replacement_data here
     for (int i = 0; i < m_cache_num_sets; i++) {
         for ( int j = 0; j < m_cache_assoc; j++) {
@@ -305,11 +306,36 @@ CacheMemory::cacheAvail(Addr address) const
             set_used_line ++;
         }
     }
-    DPRINTF(RubyCache, "cacheAvail::addr=%x, set=%x, pending size=%d, set_used_line=%d\n"
-                     , address, cacheSet, m_set_pending_addr[cacheSet].size(), set_used_line);
+    DPRINTF(RubyCache, "cacheAvail::addr=%x, set=%x, pending size=%d, sharing size=%d, set_used_line=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size()
+                     , m_set_sharing_addr[cacheSet].size(), set_used_line);
     assert(set_used_line <= m_cache_assoc);
-    //assert( (m_set_pending_addr[cacheSet].size() + set_used_line) <= m_cache_assoc);
-    return  (set_used_line > m_set_pending_addr[cacheSet].size());
+    return  (set_used_line > m_set_pending_addr[cacheSet].size()) && (set_used_line > m_set_sharing_addr[cacheSet].size());
+}
+
+bool
+CacheMemory::isBackupButCacheFull(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "isBackupButCacheFull::addr=%x, set=%x, pending size=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size());
+    assert(m_set_pending_addr[cacheSet].size() <= m_cache_assoc);
+    if (!isDirinBackup(address)) {
+        return false;
+    }
+
+    int set_unused_line = 0;
+    for (int i = 0; i < m_cache_assoc; i++) {
+        AbstractCacheEntry* entry = m_cache[cacheSet][i];
+        if (entry == NULL) {
+            set_unused_line ++;
+        }
+    }
+    DPRINTF(RubyCache, "isBackupButCacheFull::addr=%x, set=%x, pending size=%d, sharing size=%d, set_used_line=%d\n"
+                     , address, cacheSet, m_set_pending_addr[cacheSet].size()
+                     , m_set_sharing_addr[cacheSet].size(), set_unused_line);
+    assert(set_unused_line <= m_cache_assoc);
+    return(set_unused_line <= m_set_pending_addr[cacheSet].size());
 }
 
 bool
@@ -898,11 +924,11 @@ CacheMemory::getbkDirState(Addr address) {
     return "NP";
 }
 
-MachineID
-CacheMemory::getSharerinBackup(Addr address) {
+bool
+CacheMemory::isDirBackupL2(Addr address) {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
-    DPRINTF(RubyCache, "getSharerinBackup::addr=%x, set=%x\n"
+    DPRINTF(RubyCache, "isDirBackupL2::addr=%x, set=%x\n"
                      , address, cacheSet);
     assert(m_cache_backup_entry != 0);
     for (int i = 0; i < m_cache_assoc; i ++) {
@@ -914,7 +940,32 @@ CacheMemory::getSharerinBackup(Addr address) {
             for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
                 if ((*it)->address == address) {
                     assert(findTagInSet(cacheSet, address) == i);
-                    return (*it)->sharer;
+                    return (*it)->backupL2;
+                }
+            }
+        }
+    }
+    assert(false);
+    return false;
+}
+
+MachineID
+CacheMemory::getOwnerinBackup(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "getOwnerinBackup::addr=%x, set=%x\n"
+                     , address, cacheSet);
+    assert(m_cache_backup_entry != 0);
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    return (*it)->owner;
                 }
             }
         }
@@ -924,7 +975,7 @@ CacheMemory::getSharerinBackup(Addr address) {
 }
 
 AbstractCacheEntry*
-CacheMemory::insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *entry) {
+CacheMemory::insertDirBk(Addr address, MachineID owner, AbstractCacheEntry *entry) {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
     DPRINTF(RubyCache, "insertDirBk::addr=%x, set=%x\n"
@@ -948,7 +999,7 @@ CacheMemory::insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *ent
         // get an entry has been set as backup
         if (m_cache[cacheSet][i]->m_is_backup && 
             m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
-            m_cache[cacheSet][i]->insertDirBk(address, sharer);
+            m_cache[cacheSet][i]->insertDirBk(address, owner);
             m_cache[cacheSet][i]->setLastAccess(curTick());
             m_tag_index[address] = i;
             delete entry;
@@ -967,7 +1018,7 @@ CacheMemory::insertDirBk(Addr address, MachineID sharer, AbstractCacheEntry *ent
         m_cache[cacheSet][insert_pos]->setPosition(cacheSet, insert_pos);
         m_cache[cacheSet][insert_pos]->setLastAccess(curTick());
         m_cache[cacheSet][insert_pos]->m_is_backup = true;
-        m_cache[cacheSet][insert_pos]->insertDirBk(address, sharer);
+        m_cache[cacheSet][insert_pos]->insertDirBk(address, owner);
         DPRINTF(RubyCache, "insertDirBk::back in new entry\n");
         return m_cache[cacheSet][insert_pos];
     }
@@ -1180,10 +1231,12 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
       ADD_STAT(htmTransAbortReadSet, "Read set size of a aborted transaction"),
       ADD_STAT(htmTransAbortWriteSet, "Write set size of a aborted "
                                       "transaction"),
-      ADD_STAT(m_demand_hits, "Number of cache demand hits"),
+      ADD_STAT(m_demand_hits_in_dir, "Number of cache demand hits in SF"),
+      ADD_STAT(m_demand_hits_in_cache, "Number of cache demand hits in cache"),
+      ADD_STAT(m_demand_hits_recover, "Number of cache demand hits in cache, and need recovering"),
       ADD_STAT(m_demand_misses, "Number of cache demand misses"),
       ADD_STAT(m_demand_accesses, "Number of cache demand accesses",
-               m_demand_hits + m_demand_misses),
+               m_demand_hits_in_dir + m_demand_hits_in_cache + m_demand_misses),
       ADD_STAT(m_prefetch_hits, "Number of cache prefetch hits"),
       ADD_STAT(m_prefetch_misses, "Number of cache prefetch misses"),
       ADD_STAT(m_prefetch_accesses, "Number of cache prefetch accesses",
@@ -1455,7 +1508,16 @@ CacheMemory::profileForwardinl1()
 void
 CacheMemory::profileDemandHit()
 {
-    cacheMemoryStats.m_demand_hits++;
+    cacheMemoryStats.m_demand_hits_in_dir++;
+}
+
+void
+CacheMemory::profileDemandHitCache(bool need_recover)
+{
+    cacheMemoryStats.m_demand_hits_in_cache++;
+    if (need_recover) {
+        cacheMemoryStats.m_demand_hits_recover++;
+    }
 }
 
 void

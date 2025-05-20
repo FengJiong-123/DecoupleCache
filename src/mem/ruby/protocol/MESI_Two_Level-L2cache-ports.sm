@@ -45,6 +45,9 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
    Cycles l2_response_latency := 20;
    Cycles to_l1_latency := 20;
 
+   bool backup_L2_en := "false";
+   Addr debugAddr := 0; 
+
   // Message Queues
   // From local bank of L2 cache TO the network
   MessageBuffer * DirRequestFromL2Cache, network="To", virtual_network="0",
@@ -109,13 +112,20 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     L1_GETX,                 desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE,              desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE_BK,           desc="a L1D GETX request for a block maped to us";
+    L1_UPGRADE_BKL2,         desc="a L1D GETX request for a block maped to us, bk to l2";
 
     L1_GET_INSTR_BK,         desc="a L1I GET INSTR request for a block maped to us, bk";
     L1_GETS_BK,              desc="a L1D GETS request for a block maped to us, bk";
     L1_GETX_BK,              desc="a L1D GETX request for a block maped to us, bk";
 
+    L1_GET_INSTR_BKL2,       desc="a L1I GET INSTR request for a block maped to us, bk to l2";
+    L1_GETS_BKL2,            desc="a L1D GETS request for a block maped to us, bk to l2";
+    L1_GETX_BKL2,            desc="a L1D GETX request for a block maped to us, bk to l2";
+
     L1_PUTX_front,           desc="L1 replacing data, front";
     L1_PUTX_front_BK,        desc="L1 replacing data, front, bk";
+    L1_PUTX_front_BK_cachefull, desc="L1 replacing data, front, bk, cache is full";
+    L1_PUTX_BKL2,            desc="L1 replacing data, front, bk to l2";
     L1_PUTX_end,             desc="L1 replacing data, end";
     L1_PUTX_end_toMT,        desc="L1 replacing data, end to MT state";
     L1_PUTX_end_toSS,        desc="L1 replacing data, end to SS state";
@@ -273,13 +283,16 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
       return State:MT_MB;
     } else if (sta == "MT") {
        return State:MT;
+    } else if (sta == "MT_IIB") {
+      return State:MT_IIB;
     } else {
       assert(false);
     }
   }
 
-  bool isBackupStateinBusy(std::string sta) {
-    return (sta == "ISS" || sta == "IM" || sta == "MT_MB");
+  bool isBackupStateinBusy(std::string sta, bool is_putx) {
+    return (sta == "ISS"    || sta == "IM" || sta == "MT_MB" || 
+            sta == "MT_IIB" || sta == "M_I"||(sta == "PUTX" && !is_putx));
   }
 
   State getState(TBE tbe, CacheEntry cache_entry, Addr addr) {
@@ -424,6 +437,33 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
       }
     } else if (type == CoherenceRequestType:UPGRADE) {
       return Event:L1_UPGRADE_BK;
+    } else {
+      DPRINTF(RubySlicc, "address: %#x, Request Type: %s\n", addr, type);
+      error("Invalid L1 forwarded request type");
+    }
+  }
+
+  Event L1Cache_request_to_l2_to_event(CoherenceRequestType type, Addr addr,
+                                    MachineID requestor, DirEntry dir_entry, bool dirty,
+                                    State state, CacheEntry cache_entry) {
+    if(type == CoherenceRequestType:GETS) {
+      return Event:L1_GETS_BKL2;
+    } else if(type == CoherenceRequestType:GET_INSTR) {
+      return Event:L1_GET_INSTR_BKL2;
+    } else if (type == CoherenceRequestType:GETX) {
+      return Event:L1_GETX_BKL2;
+    } else if (type == CoherenceRequestType:PUTX) {
+      if (L2cache.isDirBackupL2(addr)) {
+        return Event:L1_PUTX_BKL2;
+      } else {
+        if (dirty) {
+          return Event:L1_PUTX_front_BK;
+        } else {
+          return Event:L1_PUTX_clean_BK;
+        }
+      }
+    } else if (type == CoherenceRequestType:UPGRADE) {
+      return Event:L1_UPGRADE_BKL2;
     } else {
       DPRINTF(RubySlicc, "address: %#x, Request Type: %s\n", addr, type);
       error("Invalid L1 forwarded request type");
@@ -603,9 +643,13 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                 trigger(Event:Mem_Ack_SS, in_msg.addr, cache_entry, tbe);
               }
             }
-            if (state == State:BK && (L2cache.getbkDirState(in_msg.addr) == "ISS" ||
-                                      L2cache.getbkDirState(in_msg.addr) == "IM")) {
-              trigger(Event:Mem_Ack_No_deallocTBE, in_msg.addr, cache_entry, tbe);
+            if (state == State:BK) { 
+              if (L2cache.getbkDirState(in_msg.addr) == "ISS" || L2cache.getbkDirState(in_msg.addr) == "IM") {
+                trigger(Event:Mem_Ack_No_deallocTBE, in_msg.addr, cache_entry, tbe);
+              }
+              if (L2cache.getbkDirState(in_msg.addr) == "M_I") {
+                trigger(Event:Mem_Ack_MT, in_msg.addr, cache_entry, tbe);
+              }
             }
             trigger(Event:Mem_Ack, in_msg.addr, cache_entry, tbe);
           } else if(in_msg.Type == CoherenceResponseType:INV) {
@@ -629,8 +673,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         DPRINTF(RubySlicc, "triggerInPort::addr=%x, cache dirty=%d State: %s Req: %s Type: %s\n"
                          , in_msg.addr, isDirty(cache_entry), state, in_msg.Requestor, in_msg.Type);
 
-        DPRINTF(TraceTrackerLLC, "triggerInPort::addr=%x, cache dirty=%d State: %s Req: %s Type: %s\n"
-                               , in_msg.addr, isDirty(cache_entry), state, in_msg.Requestor, in_msg.Type);
+        if (in_msg.addr == debugAddr) {
+          DPRINTF(TraceTrackerLLC, "triggerInPort::addr=%x, cache dirty=%d State: %s Req: %s Type: %s\n"
+                                , in_msg.addr, isDirty(cache_entry), state, in_msg.Requestor, in_msg.Type);
+        }
 
         if (in_msg.Type == CoherenceRequestType:EVC) {
           assert(is_valid(cache_entry));
@@ -692,8 +738,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         DPRINTF(RubySlicc, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s, cache dirty=%d, req dirty=%d\n",
                 in_msg.addr, state, in_msg.Requestor, in_msg.Type, isDirty(cache_entry), in_msg.Dirty);
 
-        DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s, cache dirty=%d, req dirty=%d\n",
-                in_msg.addr, state, in_msg.Requestor, in_msg.Type, isDirty(cache_entry), in_msg.Dirty);
+        if (in_msg.addr == debugAddr) {
+          DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::addr=%x State: %s Req: %s Type: %s, cache dirty=%d, req dirty=%d\n",
+                  in_msg.addr, state, in_msg.Requestor, in_msg.Type, isDirty(cache_entry), in_msg.Dirty);
+        }
 
         assert(machineIDToMachineType(in_msg.Requestor) == MachineType:L1Cache);
         assert(in_msg.Destination.isElement(machineID));
@@ -730,16 +778,38 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
                   in_msg.addr, cache_entry, tbe);
         
         } else if (L2cache.isDirinBackup(in_msg.addr)) {
+          // counter
+          bool needRecover := L2cache.getOwnerinBackup(in_msg.addr) != in_msg.Requestor;
+          SF.profileDemandHitCache(needRecover);
           // directory access hit in cache
           // needs to receive dir tag in dir
-          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d, backupstate=%s, backupsharer=%d\n"
-                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty, L2cache.getbkDirState(in_msg.addr), L2cache.getSharerinBackup(in_msg.addr));
+          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d, backupstate=%s, backupowner=%d\n"
+                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty, L2cache.getbkDirState(in_msg.addr), L2cache.getOwnerinBackup(in_msg.addr));
           assert(state == State:BK);
+
+          /////////////////// New Implement//////////////////////////
+          ///// Backup Directory to L2 if sharing happens////////////
+          ///////////////////////////////////////////////////////////
+          if (backup_L2_en && (needRecover || in_msg.Type == CoherenceRequestType:PUTX || 
+                                              in_msg.Type == CoherenceRequestType:UPGRADE)) {
+            DPRINTF(RubySlicc, "L1RequestL2Network_in::backup to L2::addr=%x\n"
+                             , in_msg.addr);
+            assert(is_invalid(cache_entry));
+            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr), in_msg.Type == CoherenceRequestType:PUTX)) {
+              // may be stall by other access
+              trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
+            }
+            trigger(L1Cache_request_to_l2_to_event(in_msg.Type, in_msg.addr,
+                                                   in_msg.Requestor, dir_entry, in_msg.Dirty,
+                                                   state, cache_entry),
+                        in_msg.addr, cache_entry, tbe);
+          }
+
           if (in_msg.Type == CoherenceRequestType:PUTX || 
               in_msg.Type == CoherenceRequestType:UPGRADE ||
-             (SF.cacheAvail(in_msg.addr) && L2cache.getSharerinBackup(in_msg.addr) != in_msg.Requestor)) {
+             (SF.cacheAvail(in_msg.addr) && needRecover)) {
             
-            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr))) {
+            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr), in_msg.Type == CoherenceRequestType:PUTX)) {
               // may be stall by other access
               trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
             }
@@ -757,7 +827,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             if (!SF.isTagPresent(victim) || SF.cacheBlock(in_msg.addr)) {
               // this means the current SF set has been pending full
               // so that is not available
-              DPRINTF(RubySlicc, "L1RequestL2Network_in::backup::directory block::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
+              DPRINTF(RubySlicc, "L1RequestL2Network_in::backup::directory block when recover::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
                                , in_msg.addr, state, victim,victim_state, is_valid(L2cache_entry));
               stall_and_wait(L1RequestL2Network_in, victim);
               trigger(Event:Pop_ReqIn, in_msg.addr, cache_entry, tbe);
@@ -766,11 +836,13 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             // set to evcit flag
             DPRINTF(RubySlicc, "L1RequestL2Network_in::backup::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
                              , in_msg.addr, state, victim, victim_state, is_valid(L2cache_entry));
+            if (in_msg.addr == debugAddr) {
+              DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::backup::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
+                              , in_msg.addr, state, victim, victim_state, is_valid(L2cache_entry));
+            }
 
-            DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::backup::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
-                             , in_msg.addr, state, victim, victim_state, is_valid(L2cache_entry));
-
-            if (dir_victim_entry.Sharers.count() == 1 && is_invalid(L2cache_entry) && L2cache.isFreetoBackup(victim)) {
+            if (dir_victim_entry.Sharers.count() == 1 && (victim_state == State:MT || victim_state == State:M_I || victim_state == State:SS) &&
+                is_invalid(L2cache_entry) && L2cache.isFreetoBackup(victim)) {
               // directory has only one sharers, so that we switch it to cache as back up
               // may need cache evict for the directory entry switched
               Addr cache_victim := L2cache.cacheProbetoBk(victim);
@@ -907,9 +979,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             // set to evcit flag
             DPRINTF(RubySlicc, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
                              , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
-
-            DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
-                             , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
+            if (in_msg.addr == debugAddr) {
+              DPRINTF(TraceTrackerLLC, "L1RequestL2Network_in::directory replacement::addr=%x, state=%d, victim=%x, state=%d, cache valid=%d\n"
+                              , in_msg.addr, state, victim, getState(tbe_victim, L2cache_entry, victim), is_valid(L2cache_entry));
+            }
 
             stall_and_wait(L1RequestL2Network_in, victim);
             // savePendingAddr

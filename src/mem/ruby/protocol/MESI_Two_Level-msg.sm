@@ -75,6 +75,7 @@ structure(RequestMsg, desc="...", interface="Message") {
   DataBlock DataBlk,            desc="Data for the cache line (if PUTX)";
   int Len;
   bool Dirty, default="false",  desc="Dirty bit";
+  bool backupL2, default="false",  desc="forward request will backup to l2";
   PrefetchBit Prefetch,         desc="Is this a prefetch request";
   //bool countNot, default="true",desc="not count";
 

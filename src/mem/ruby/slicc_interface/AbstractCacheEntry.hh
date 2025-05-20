@@ -62,10 +62,11 @@ namespace ruby
 
 struct DirInCacheEntry {
   Addr address;
-  MachineID sharer;
+  MachineID owner;
   std::string state;
   bool waitEvict;
   bool isBlocked;
+  bool backupL2;
 };
 
 class AbstractCacheEntry : public ReplaceableEntry
@@ -130,7 +131,7 @@ class AbstractCacheEntry : public ReplaceableEntry
     void setLastAccess(Tick tick) { m_last_touch_tick = tick; }
 
     // insert an backup dir entry
-    void insertDirBk(Addr address, MachineID sharer);
+    void insertDirBk(Addr address, MachineID owner);
 
     // hardware transactional memory
     void setInHtmReadSet(bool val);

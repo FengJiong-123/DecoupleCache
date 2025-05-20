@@ -67,6 +67,26 @@ action(b_forwardRequestToExclusive, "b", desc="Forward request to the exclusive 
     }
 }
 
+action(b_forwardRequestToOwner_withbk, "bo", desc="Forward request to the owner L1, and will bk") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        MachineID owner := L2cache.getOwnerinBackup(address);
+        DPRINTF(RubySlicc, "b_forwardRequestToOwner_withbk::addr=%x, requestor=%d, owner=%d\n"
+                         , address, in_msg.Requestor);
+        assert(L2cache.getbkDirState(address) == "MT");
+        assert(owner != in_msg.Requestor);
+        assert(backup_L2_en);
+        enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
+            // formal
+            out_msg.addr := address;
+            out_msg.Type := in_msg.Type;
+            out_msg.Requestor := in_msg.Requestor;
+            out_msg.Destination.add(owner);
+            out_msg.backupL2 := true;
+            out_msg.MessageSize := MessageSizeType:Request_Control;
+        }
+    }
+}
+
 action(c_exclusiveReplacement, "c", desc="Send data to memory") {
     assert(is_valid(cache_entry));
     DirEntry dir_entry := getDirEntry(address);
@@ -476,7 +496,9 @@ action(mr_writeDataToCacheFromRequest, "mr", desc="Write data from request queue
                         assert(is_valid(dir_entry));
                         dir_entry.waitEvict := true;
                     }
-                    stall_and_wait(L1RequestL2Network_in, victim);
+                    if (orgState != State:NP) {
+                        stall_and_wait(L1RequestL2Network_in, victim);
+                    }
                     // trigger cache replacement by trigger port
                     enqueue(triggerOutPort, RequestMsg, 0) {
                         out_msg.addr := victim;
@@ -515,6 +537,37 @@ action(mr_writeDataToCacheFromRequest, "mr", desc="Write data from request queue
                 out_msg.Prefetch := in_msg.Prefetch;
             }
         }
+    }
+}
+
+action(mr_writeDataToCacheFromPutxinBK, "mrbk", desc="Write data from putx queue to cache") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DPRINTF(RubySlicc, "mr_writeDataToCacheFromPutxinBK::addr=%x, dirty=%d\n"
+                         , in_msg.addr, in_msg.Dirty);
+        assert(in_msg.Dirty);
+        // need to allocate cache
+        assert(is_invalid(cache_entry));
+        assert(!L2cache.cacheAvail(address));
+
+        State orgState := getState(tbe, cache_entry, in_msg.addr);
+        // need replacement
+        Addr victim := L2cache.cacheProbe(in_msg.addr);
+        CacheEntry L2cache_entry := getCacheEntry(victim);
+        TBE tbe_victim := TBEs[victim];
+        DPRINTF(RubySlicc, "mr_writeDataToCacheFromPutxinBK::Cache victim::addr=%x, state=%d, victim=%x, state=%d\n"
+                            , in_msg.addr, orgState, victim, getState(tbe_victim, L2cache_entry, victim));
+        stall_and_wait(L1RequestL2Network_in, victim);
+        // trigger cache replacement by trigger port
+        enqueue(triggerOutPort, RequestMsg, 0) {
+            out_msg.addr := victim;
+            out_msg.Type := CoherenceRequestType:EVC;
+            out_msg.AccessMode := in_msg.AccessMode;
+            out_msg.MessageSize := in_msg.MessageSize;
+            out_msg.DataBlk := L2cache_entry.DataBlk;
+            out_msg.Dirty := L2cache_entry.Dirty;
+            out_msg.Len := 1;
+        }
+        L2cache.savePendingAddr(in_msg.addr, machineID);
     }
 }
 
@@ -676,11 +729,14 @@ action(s_switchDirBk, "\sbk", desc="switch dir tag from directory to cache as ba
 
 action(k_removeDirBk, "\kbk", desc="remove dir tag in cache as back up.") {
     peek(L1RequestL2Network_in, RequestMsg) {
+        MachineID Owner :=  L2cache.getOwnerinBackup(address);
+        State state := getState(tbe, cache_entry, address);
+        DPRINTF(RubySlicc, "k_removeDirBk::addr=%x, Requestor=%d, Owner=%d, cacheline valid=%d, state=%d\n"
+                         , address, in_msg.Requestor, Owner, is_valid(cache_entry), state);
+        assert(in_msg.Type == CoherenceRequestType:PUTX);
+        assert(in_msg.Requestor == Owner);
         L2cache.removeDirBk(address);
         unset_cache_entry();
-        State state := getState(tbe, cache_entry, address);
-        DPRINTF(RubySlicc, "k_removeDirBk::addr=%x, Requestor=%d, cacheline valid=%d, state=%d\n"
-                         , address, in_msg.Requestor, is_valid(cache_entry), state);
     }
 }
 
@@ -692,7 +748,7 @@ action(qk_allocateDirFromCache, "\qk", desc="allocate directory from cache.") {
     SF.removePendingAddr(address);
 
     DirEntry dir_entry := getDirEntry(address);
-    dir_entry.Exclusive := L2cache.getSharerinBackup(address);
+    dir_entry.Exclusive := L2cache.getOwnerinBackup(address);
     addSharer(address, dir_entry.Exclusive, dir_entry);
 
     L2cache.removeDirBk(address);
@@ -808,7 +864,7 @@ action(ts_sendInvAckToUpgraderBk, "tsbk", desc="Send ACK to upgrader when cache 
         enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
             DPRINTF(RubySlicc, "ts_sendInvAckToUpgraderBk::addr=%x, requestor=%d\n"
                              , address, in_msg.Requestor);
-            assert(L2cache.getSharerinBackup(address) == in_msg.Requestor);
+            assert(L2cache.getOwnerinBackup(address) == in_msg.Requestor);
             out_msg.addr := address;
             out_msg.Type := CoherenceResponseType:ACK;
             out_msg.Sender := machineID;
@@ -949,6 +1005,21 @@ action(sts_setBkStateMT, "\stsMT", desc="set back up state as MT") {
     L2cache.setDirState(address, "MT");
 }
 
+action(sts_setBkStateM_I, "\stsM_I", desc="set back up state as M_I") {
+    DPRINTF(RubySlicc, "sts_setBkStateM_I::addr=%x\n", address);
+    L2cache.setDirState(address, "M_I");
+}
+
+action(sts_setBkStateMT_IIB, "\stsMTIIB", desc="set back up state as MTIIB") {
+    DPRINTF(RubySlicc, "sts_setBkStateMTIIB::addr=%x\n", address);
+    L2cache.setDirState(address, "MT_IIB");
+}
+
+action(sts_setBkStatePUTX, "\stsPUTX", desc="set back up state as PUTX") {
+    DPRINTF(RubySlicc, "sts_setBkStatePUTX::addr=%x\n", address);
+    L2cache.setDirState(address, "PUTX");
+}
+
 action(rrf_removeCacheEvictFlag, "\rrf", desc="remove cache evict flag when state is I_I") {
     DPRINTF(RubySlicc, "rrf_removeCacheEvictFlag::addr=%x\n", address);
     assert(is_valid(tbe));
@@ -992,7 +1063,7 @@ transition({MT,M,NP,BK}, Pend){
     zz_stallAndWaitL1RequestQueue;
 }
 
-transition({NP,M,M_I,S_I,I_I}, Pop_ReqIn){
+transition({NP,M,M_I,S_I,I_I,BK}, Pop_ReqIn){
 }
 
 transition({I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
@@ -1133,10 +1204,18 @@ transition({M,MT,SS}, SF_Replacement_withC, S_I) {
     jjt_popTriggerPort;
 }
 
-transition({MT,M_I,SS}, SF_Switch, BK) {
+transition({MT,SS}, SF_Switch, BK) {
     // directory switch to cache
     s_switchDirBk;
     sts_setBkStateMT;
+    rr_deallocateDirBlock;
+    jjt_popTriggerPort;
+}
+
+transition(M_I, SF_Switch, BK) {
+    // directory switch to cache
+    s_switchDirBk;
+    sts_setBkStateM_I;
     rr_deallocateDirBlock;
     jjt_popTriggerPort;
 }
@@ -1432,6 +1511,14 @@ transition(BK, {L1_GETS_BK, L1_GET_INSTR_BK}, MT_IIB) {
     jj_popL1RequestQueue;
 }
 
+transition(BK, {L1_GETS_BKL2, L1_GET_INSTR_BKL2}) {
+    b_forwardRequestToOwner_withbk;
+    uu_profileMiss;
+    set_setMRU;
+    sts_setBkStateMT_IIB;
+    jj_popL1RequestQueue;
+}
+
 transition({SS_MB,MT_MB,MT_IIB}, Exclusive_Unblock, MT) {
     // update actual directory
     mmu_markExclusiveFromUnblock;
@@ -1502,6 +1589,13 @@ transition(BK, Mem_Ack) {
 
 transition(BK, Mem_Ack_No_deallocTBE) {
     o_popIncomingResponseQueue;
+    kd_wakeUpDependents;
+}
+
+transition(BK, Mem_Ack_MT) {
+    s_deallocateTBE;
+    o_popIncomingResponseQueue;
+    sts_setBkStateMT;
     kd_wakeUpDependents;
 }
 

@@ -177,6 +177,7 @@ def create_system(
                 cross_page=True,
             )
 
+            #print(send_evicts(options))
             l0_cntrl = L0Cache_Controller(
                 version=i * num_cpus_per_cluster + j,
                 Icache=l0i_cache,
@@ -278,6 +279,7 @@ def create_system(
                 l2_request_latency=20,
                 l2_response_latency=20,
                 to_l1_latency=20,
+                debugAddr=0x60a9bc0,
                 cluster_id=i,
                 transitions_per_cycle=options.l2_transitions_per_cycle,
                 ruby_system=ruby_system,

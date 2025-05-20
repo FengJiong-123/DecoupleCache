@@ -45,6 +45,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
    Cycles l1_response_latency := 7;
    Cycles to_l2_latency := 7;
 
+   bool backup_L2_en := "false";
+
    // Message Buffers between the L1 and the L0 Cache
    // From the L1 cache to the L0 cache
    MessageBuffer * bufferToL0, network="To";
@@ -108,6 +110,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     // L0 cache received the invalidation message
     // and has sent the data.
     L0_DataAck,      desc="L0 received INV message";
+    L0_DataShare,    desc="L0 received Forward sharing message";
 
     Inv,           desc="Invalidate request from L2 bank";
     Inv_SD,        desc="Invalidate request from L2 bank, need send data to L2";
@@ -149,6 +152,8 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     State CacheState,        desc="cache state";
     DataBlock DataBlk,       desc="data for the block";
     bool Dirty, default="false",   desc="data is dirty";
+    bool isDir, default="false",   desc="is directory";
+    NetDest Sharers,               desc="tracks the L1 shares on-chip";
   }
 
   // TBE fields
@@ -386,10 +391,21 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
         //     }
         } else if (in_msg.Type == CoherenceRequestType:GETS) {
             cache.profileRemainedEntry(in_msg.addr);
-            if (is_valid(cache_entry) && inL0Cache(cache_entry.CacheState)) {
-                cache.profileForwardinl0();
-                trigger(Event:L0_Invalidate_Else, in_msg.addr,
-                        cache_entry, tbe);
+            if (is_valid(cache_entry)) {
+              if (cache_entry.CacheState == State:S || cache_entry.CacheState == State:SM ||
+                  cache_entry.CacheState == State:M || cache_entry.CacheState == State:E) {
+              //if (cache_entry.CacheState == State:S) {
+                  cache.profileForwardinl0();
+                  trigger(Event:Fwd_GETS, in_msg.addr, cache_entry, tbe);
+
+              } else if (inL0Cache(cache_entry.CacheState)) {
+                  cache.profileForwardinl0();
+                  trigger(Event:L0_Invalidate_Else, in_msg.addr,
+                          cache_entry, tbe);
+              } else {
+                  cache.profileForwardinl1();
+                  trigger(Event:Fwd_GETS, in_msg.addr, cache_entry, tbe);
+              }
             } else {
                 cache.profileForwardinl1();
                 trigger(Event:Fwd_GETS, in_msg.addr, cache_entry, tbe);
@@ -413,10 +429,12 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
         if(in_msg.Class == CoherenceClass:INV_DATA) {
             trigger(Event:L0_DataAck, in_msg.addr, cache_entry, tbe);
+        }  else if (in_msg.Class == CoherenceClass:SHARE_DATA) {
+            trigger(Event:L0_DataShare, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:NAK) {
-              trigger(Event:L0_DataNak, in_msg.addr, cache_entry, tbe);
+            trigger(Event:L0_DataNak, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:PUTX_COPY) {
-              trigger(Event:L0_DataCopy, in_msg.addr, cache_entry, tbe);
+            trigger(Event:L0_DataCopy, in_msg.addr, cache_entry, tbe);
         }  else if (in_msg.Class == CoherenceClass:INV_ACK) {
             trigger(Event:L0_Ack, in_msg.addr, cache_entry, tbe);
         }  else {
@@ -640,6 +658,17 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
           out_msg.MessageSize := MessageSizeType:Control;
       }
   }
+
+  action(forward_getS_to_L0_else, "\ccgs", desc="sends (else) getS information to the processor") {
+    enqueue(bufferToL0_out, CoherenceMsg, l1_request_latency) {
+        DPRINTF(RubySlicc, "forward_getS_to_L0_else::addr=%x\n", address);
+        out_msg.addr := address;
+        out_msg.Class := CoherenceClass:GETS;
+        out_msg.Sender := machineID;
+        out_msg.Dest := createMachineID(MachineType:L0Cache, version);
+        out_msg.MessageSize := MessageSizeType:Control;
+    }
+}
 
   action(g_issuePUTX, "g", desc="send data to the L2 cache") {
     enqueue(requestNetwork_out, RequestMsg, l1_response_latency) {
@@ -945,12 +974,22 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     l_popL2RequestQueue;
   }
 
+  transition({S,SM}, Fwd_GETS) {
+    d_sendDataToRequestor;
+    d2_sendDataToL2;
+    l_popL2RequestQueue;
+  }
+
   transition(E, L0_Invalidate_Own, E_IL0) {
     forward_eviction_to_L0_own;
   }
 
   transition(E, L0_Invalidate_Else, E_IL0) {
     forward_eviction_to_L0_else;
+  }
+
+  transition(E, Fwd_GETS, E_IL0) {
+    forward_getS_to_L0_else;
   }
 
   // Transitions from Modified
@@ -1005,6 +1044,10 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
 
   transition(M, L0_Invalidate_Else, M_IL0) {
     forward_eviction_to_L0_else;
+  }
+
+  transition(M, Fwd_GETS, M_IL0) {
+    forward_getS_to_L0_else;
   }
 
   transition(M_I, Fwd_GETX, SINK_WB_ACK) {
@@ -1136,6 +1179,12 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
   }
 
   transition({M_IL0, E_IL0}, L0_DataAck, MM) {
+    u_writeDataFromL0Response;
+    k_popL0RequestQueue;
+    kd_wakeUpDependents;
+  }
+
+  transition({M_IL0, E_IL0}, L0_DataShare, S) {
     u_writeDataFromL0Response;
     k_popL0RequestQueue;
     kd_wakeUpDependents;

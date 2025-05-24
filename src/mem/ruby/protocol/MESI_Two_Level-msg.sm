@@ -62,6 +62,9 @@ enumeration(CoherenceResponseType, desc="...") {
   UNBLOCK, desc="unblock";
   EXCLUSIVE_UNBLOCK, desc="exclusive unblock";
   INV, desc="Invalidate from directory (coherence miss)";
+  INVBK, desc="Invalidate from L2";
+  BK_to_SS, desc="Bk to SS";
+  BK_to_MT, desc="Bk to MT";
 }
 
 // RequestMsg
@@ -103,6 +106,8 @@ structure(ResponseMsg, desc="...", interface="Message") {
   NetDest Destination,          desc="Node to whom the data is sent";
   DataBlock DataBlk,            desc="Data for the cache line";
   bool Dirty, default="false",  desc="Dirty bit";
+  bool backupL2, default="false",  desc="forward request backup in l2 successfully";
+  bool reviseOwner, default="false",  desc="forward request backup in l2 fail, need revise owner";
   int AckCount, default="0",  desc="number of acks in this message";
   MessageSizeType MessageSize,  desc="size category of the message";
 

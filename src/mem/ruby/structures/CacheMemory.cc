@@ -615,6 +615,38 @@ CacheMemory::cacheProbe(Addr address) const
         assert(!m_cache[cacheSet][victim_pos]->m_waitEvict);
         m_cache[cacheSet][victim_pos]->m_waitEvict = true;
         return m_cache[cacheSet][victim_pos]->m_Address;
+
+    } else if (m_new_replacement == 3) {
+        Tick least_tick = curTick() + 1;
+        int victim_pos = m_cache_assoc;
+        
+        for (int i = 0; i < m_cache_assoc; i ++) {
+            if (m_cache[cacheSet][i] != NULL) {
+                [[maybe_unused]] const L1Cache_Entry* L1cacheEntry;
+                L1cacheEntry = dynamic_cast<const L1Cache_Entry *>(m_cache[cacheSet][i]);
+                DPRINTF(RubyCache, "cacheProbe::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d, isDir=%d, state=%d\n"
+                                 , m_cache[cacheSet][i]->m_Address, i, m_cache[cacheSet][i]->getLastAccess()
+                                 , m_cache[cacheSet][i]->m_waitEvict, L1cacheEntry->m_isDir, L1cacheEntry->m_CacheState);
+                assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
+                if (L1cacheEntry->m_isDir &&
+                   (L1cacheEntry->m_CacheState == L1Cache_State_S || L1cacheEntry->m_CacheState == L1Cache_State_E ||
+                    L1cacheEntry->m_CacheState == L1Cache_State_M || L1cacheEntry->m_CacheState == L1Cache_State_SM)) {
+                    continue;
+                }
+                if (m_cache[cacheSet][i]->getLastAccess() < least_tick) {
+                    least_tick = m_cache[cacheSet][i]->getLastAccess();
+                    victim_pos = i;
+                }
+            } else {
+                DPRINTF(RubyCache, "cacheProbe::entry is null, pos=%d\n", i);
+            }
+        }
+        assert(victim_pos < m_cache_assoc);
+        assert(m_cache[cacheSet][victim_pos] != NULL);
+        assert(m_cache[cacheSet][victim_pos]->getLastAccess() < curTick() + 1);
+        m_cache[cacheSet][victim_pos]->m_waitEvict = true;
+        return m_cache[cacheSet][victim_pos]->m_Address;
+
     } else {
         assert(false);
     }
@@ -949,6 +981,63 @@ CacheMemory::isDirBackupL2(Addr address) {
     return false;
 }
 
+void
+CacheMemory::setDirBackupL2(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "setDirBackupL2::addr=%x, set=%x\n"
+                     , address, cacheSet);
+
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+        DPRINTF(RubyCache, "setDirBackupL2::pos=%d, addr=%x, m_is_backup=%d, dir size=%d\n"
+                         , i, m_cache[cacheSet][i]->m_Address
+                         , m_cache[cacheSet][i]->m_is_backup, m_cache[cacheSet][i]->m_dir_bkup.size());
+        // get an entry has been set as backup
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    (*it)->backupL2 = true;
+                    return;
+                }
+            }
+        }
+    }
+    panic("can't set a backup dir entry state!!!");
+}
+
+void
+CacheMemory::removeDirBackupL2(Addr address) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "removeDirBackupL2::addr=%x, set=%x\n"
+                     , address, cacheSet);
+
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+        DPRINTF(RubyCache, "removeDirBackupL2::pos=%d, addr=%x, m_is_backup=%d, dir size=%d\n"
+                         , i, m_cache[cacheSet][i]->m_Address
+                         , m_cache[cacheSet][i]->m_is_backup, m_cache[cacheSet][i]->m_dir_bkup.size());
+        // get an entry has been set as backup
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert((*it)->state == "MT");
+                    (*it)->backupL2 = false;
+                    return;
+                }
+            }
+        }
+    }
+    panic("can't set a backup dir entry state!!!");
+}
+
 MachineID
 CacheMemory::getOwnerinBackup(Addr address) {
     assert(address == makeLineAddress(address));
@@ -966,6 +1055,32 @@ CacheMemory::getOwnerinBackup(Addr address) {
                 if ((*it)->address == address) {
                     assert(findTagInSet(cacheSet, address) == i);
                     return (*it)->owner;
+                }
+            }
+        }
+    }
+    assert(false);
+    //return "NP";
+}
+
+void
+CacheMemory::setOwnerinBackup(Addr address, MachineID owner) {
+    assert(address == makeLineAddress(address));
+    int64_t cacheSet = addressToCacheSet(address);
+    DPRINTF(RubyCache, "setOwnerinBackup::addr=%x, set=%x, owner=%d\n"
+                     , address, cacheSet, owner);
+    assert(m_cache_backup_entry != 0);
+    for (int i = 0; i < m_cache_assoc; i ++) {
+        if (m_cache[cacheSet][i] == NULL) {
+            continue;
+        }
+        if (m_cache[cacheSet][i]->m_is_backup) {
+            assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
+                if ((*it)->address == address) {
+                    assert(findTagInSet(cacheSet, address) == i);
+                    (*it)->owner = owner;
+                    return;
                 }
             }
         }

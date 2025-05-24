@@ -225,7 +225,10 @@ structure (CacheMemory, external = "yes") {
   bool isDirinBackup(Addr);
   std::string getbkDirState(Addr);
   bool isDirBackupL2(Addr);
+  void setDirBackupL2(Addr);
+  void removeDirBackupL2(Addr);
   MachineID getOwnerinBackup(Addr);
+  void setOwnerinBackup(Addr, MachineID);
   AbstractCacheEntry insertDirBk(Addr, MachineID, AbstractCacheEntry);
   void removeDirBk(Addr);
   void setDirState(Addr, std::string);

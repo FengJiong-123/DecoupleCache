@@ -59,6 +59,8 @@
 #include "mem/ruby/structures/BankedArray.hh"
 #include "mem/ruby/structures/ALUFreeListArray.hh"
 #include "mem/ruby/system/CacheRecorder.hh"
+#include "mem/ruby/protocol/L1Cache_Entry.hh"
+#include "mem/ruby/protocol/L1Cache_State.hh"
 #include "params/RubyCache.hh"
 #include "sim/sim_object.hh"
 
@@ -159,7 +161,10 @@ class CacheMemory : public SimObject
     bool isDirinBackup(Addr address);
     std::string getbkDirState(Addr address);
     bool isDirBackupL2(Addr address);
+    void setDirBackupL2(Addr address);
+    void removeDirBackupL2(Addr address);
     MachineID getOwnerinBackup(Addr address);
+    void setOwnerinBackup(Addr address, MachineID owner);
     AbstractCacheEntry* insertDirBk(Addr address, MachineID owner, AbstractCacheEntry *entry);
     void removeDirBk(Addr address);
     void setDirState(Addr address, const std::string& state);

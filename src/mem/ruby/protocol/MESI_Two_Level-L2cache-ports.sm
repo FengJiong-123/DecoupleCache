@@ -113,6 +113,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     L1_UPGRADE,              desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE_BK,           desc="a L1D GETX request for a block maped to us";
     L1_UPGRADE_BKL2,         desc="a L1D GETX request for a block maped to us, bk to l2";
+    L1_UPGRADE_BKnoL2,       desc="a L1D GETX request for a block maped to us, different requestor";
 
     L1_GET_INSTR_BK,         desc="a L1I GET INSTR request for a block maped to us, bk";
     L1_GETS_BK,              desc="a L1D GETS request for a block maped to us, bk";
@@ -125,16 +126,21 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     L1_PUTX_front,           desc="L1 replacing data, front";
     L1_PUTX_front_BK,        desc="L1 replacing data, front, bk";
     L1_PUTX_front_BK_cachefull, desc="L1 replacing data, front, bk, cache is full";
-    L1_PUTX_BKL2,            desc="L1 replacing data, front, bk to l2";
+    L1_PUTX_front_BKL2,      desc="L1 replacing data, front, bk to l2";
     L1_PUTX_end,             desc="L1 replacing data, end";
     L1_PUTX_end_toMT,        desc="L1 replacing data, end to MT state";
     L1_PUTX_end_toSS,        desc="L1 replacing data, end to SS state";
+    L1_PUTX_end_BKL2,        desc="L1 replacing data, end, bk to l2";
     L1_PUTX_clean,           desc="L1 replacing clean data";
     L1_PUTX_clean_BK,        desc="L1 replacing clean data, bk";
     L1_PUTX_clean_toM,       desc="L1 replacing clean data to M state";
     L1_PUTX_clean_toNP,      desc="L1 replacing clean data to NP state";
     L1_PUTX_clean_pop,       desc="L1 replacing clean data, only pop queue";
     //L1_PUTX_old,             desc="L1 replacing data, but no longer sharer";
+
+    // Bk putx respond
+    BK_Putx_to_MT,           desc="BK putx set to MT";
+    BK_Putx_to_SS,           desc="BK putx set to SS";
 
     // events initiated by this L2
     L2_Replacement,          desc="L2 Replacement", format="!r";
@@ -159,12 +165,16 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     WB_Data_Keep,            desc="data from L1, but keep I_I state";
     WB_Data_clean,           desc="clean data from L1";
     WB_Data_all,             desc="data from L1";
+    WB_Data_BK_MTIB,         desc="data from L1, backup in cache";
+    WB_Data_BK_MTIIB,        desc="data from L1, backup in cache";
     Ack,                     desc="writeback ack";
     Ack_all,                 desc="writeback ack";
     Ack_all_DtoMem,          desc="writeback ack, but need to send data to mem";
 
     Unblock,                 desc="Unblock from L1 requestor";
     Unblock_Keep,            desc="Unblock from L1 requestor, but keep MT_SB state";
+    Unblock_BK_MTSB,         desc="Unblock from L1 requestor, backupL2";
+    Unblock_BK_MTIIB,        desc="Unblock from L1 requestor, backupL2";
     Exclusive_Unblock,       desc="Unblock from L1 requestor";
 
     MEM_Inv,                 desc="Invalidation from directory";
@@ -208,6 +218,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
 
     NetDest L1_GetS_IDs,            desc="Set of the internal processors that want the block in shared state";
     MachineID L1_GetX_ID,          desc="ID of the L1 cache to forward the block to once we get a response";
+    MachineID requestor,          desc="ID of the L1 cache to receive getS in BK state";
     int pendingAcks,            desc="number of pending acks for invalidates during writeback";
     int waitDataNum,            desc="this is only for multi requests hit SS state that need several WB_Data";
   }
@@ -290,9 +301,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     }
   }
 
-  bool isBackupStateinBusy(std::string sta, bool is_putx) {
-    return (sta == "ISS"    || sta == "IM" || sta == "MT_MB" || 
-            sta == "MT_IIB" || sta == "M_I"||(sta == "PUTX" && !is_putx));
+  bool isBackupStateinBusy(std::string sta) {
+    return (sta == "ISS"    || sta == "IM"   || sta == "MT_MB" || 
+            sta == "MT_IIB" || sta == "M_I"  || sta == "PUTX"  ||
+            sta == "MT_IB"  || sta == "MT_SB"|| sta == "SS_MB");
   }
 
   State getState(TBE tbe, CacheEntry cache_entry, Addr addr) {
@@ -420,9 +432,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
     }
   }
 
-  Event L1Cache_request_bk_to_event(CoherenceRequestType type, Addr addr,
-                                    MachineID requestor, DirEntry dir_entry, bool dirty,
-                                    State state, CacheEntry cache_entry) {
+  Event L1Cache_request_bk_to_event(CoherenceRequestType type, Addr addr, bool dirty) {
     if(type == CoherenceRequestType:GETS) {
       return Event:L1_GETS_BK;
     } else if(type == CoherenceRequestType:GET_INSTR) {
@@ -444,17 +454,20 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
   }
 
   Event L1Cache_request_to_l2_to_event(CoherenceRequestType type, Addr addr,
-                                    MachineID requestor, DirEntry dir_entry, bool dirty,
-                                    State state, CacheEntry cache_entry) {
+                                       bool dirty, bool isBkL2, bool needRecover) {
     if(type == CoherenceRequestType:GETS) {
       return Event:L1_GETS_BKL2;
     } else if(type == CoherenceRequestType:GET_INSTR) {
       return Event:L1_GET_INSTR_BKL2;
     } else if (type == CoherenceRequestType:GETX) {
-      return Event:L1_GETX_BKL2;
+      if (isBkL2) {
+        return Event:L1_GETX_BKL2;
+      } else {
+        return Event:L1_GETX_BK;
+      }
     } else if (type == CoherenceRequestType:PUTX) {
-      if (L2cache.isDirBackupL2(addr)) {
-        return Event:L1_PUTX_BKL2;
+      if (isBkL2) {
+        return Event:L1_PUTX_front_BKL2;
       } else {
         if (dirty) {
           return Event:L1_PUTX_front_BK;
@@ -463,7 +476,17 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         }
       }
     } else if (type == CoherenceRequestType:UPGRADE) {
-      return Event:L1_UPGRADE_BKL2;
+      if (isBkL2) {
+        return Event:L1_UPGRADE_BKL2;
+      } else {
+        if (needRecover) {
+          // nned recover means this update is from 
+          // the different requestor that holds in
+          // Bk sharer, so return L1_UPGRADE_BKnoL2;
+          return Event:L1_UPGRADE_BKnoL2;
+        }
+        return Event:L1_UPGRADE_BK;
+      }
     } else {
       DPRINTF(RubySlicc, "address: %#x, Request Type: %s\n", addr, type);
       error("Invalid L1 forwarded request type");
@@ -521,6 +544,17 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               assert(false); // disable waitDataNum because SS cannot share data 
                              // to two requestors at the same time
               trigger(Event:Unblock_Keep, in_msg.addr, cache_entry, tbe);
+            }
+          }
+          if (state == State:BK) {
+            assert(backup_L2_en);
+            std::string sta := L2cache.getbkDirState(in_msg.addr);
+            if (sta == "MT_SB") {
+              trigger(Event:Unblock_BK_MTSB, in_msg.addr, cache_entry, tbe);
+            } else if (sta == "MT_IIB") {
+              trigger(Event:Unblock_BK_MTIIB, in_msg.addr, cache_entry, tbe);
+            } else {
+              assert(false);
             }
           }
           trigger(Event:Unblock, in_msg.addr, cache_entry, tbe);
@@ -606,6 +640,19 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
             }
           } else {
             if(in_msg.Type == CoherenceResponseType:DATA) {
+              if (state == State:BK) {
+                assert(backup_L2_en);
+                std::string sta := L2cache.getbkDirState(in_msg.addr);
+                DPRINTF(RubySlicc, "responseL2Network_in:BK receives data::addr=%x, sta=%s, backupL2=%d, reviseOwner=%d\n"
+                                   , in_msg.addr, sta, in_msg.backupL2, in_msg.reviseOwner);
+                if (sta == "MT_IIB") {
+                  trigger(Event:WB_Data_BK_MTIIB, in_msg.addr, cache_entry, tbe);
+                } else if (sta == "MT_IB") {
+                  trigger(Event:WB_Data_BK_MTIB, in_msg.addr, cache_entry, tbe);
+                } else {
+                  assert(false);
+                }
+              }
               if (in_msg.Dirty) {
                 trigger(Event:WB_Data, in_msg.addr, cache_entry, tbe);
               } else {
@@ -617,6 +664,10 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               } else {
                 trigger(Event:Ack, in_msg.addr, cache_entry, tbe);
               }
+            } else if (in_msg.Type == CoherenceResponseType:BK_to_MT) {
+              trigger(Event:BK_Putx_to_MT, in_msg.addr, cache_entry, tbe);
+            } else if (in_msg.Type == CoherenceResponseType:BK_to_SS) {
+              trigger(Event:BK_Putx_to_SS, in_msg.addr, cache_entry, tbe);
             } else {
               error("unknown message type");
             }
@@ -779,29 +830,29 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
         
         } else if (L2cache.isDirinBackup(in_msg.addr)) {
           // counter
-          bool needRecover := L2cache.getOwnerinBackup(in_msg.addr) != in_msg.Requestor;
+          MachineID Owner := L2cache.getOwnerinBackup(in_msg.addr);
+          bool needRecover := Owner != in_msg.Requestor;
+          bool isBkL2 := L2cache.isDirBackupL2(in_msg.addr);
           SF.profileDemandHitCache(needRecover);
           // directory access hit in cache
           // needs to receive dir tag in dir
-          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d, backupstate=%s, backupowner=%d\n"
-                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty, L2cache.getbkDirState(in_msg.addr), L2cache.getOwnerinBackup(in_msg.addr));
+          DPRINTF(RubySlicc, "L1RequestL2Network_in::directory hits in cache::addr=%x, state=%d, Type=%d, Dirty=%d, backupstate=%s, backupowner=%d, isBkL2=%d\n"
+                           , in_msg.addr, state, in_msg.Type, in_msg.Dirty, L2cache.getbkDirState(in_msg.addr), Owner, isBkL2);
           assert(state == State:BK);
 
           /////////////////// New Implement//////////////////////////
           ///// Backup Directory to L2 if sharing happens////////////
           ///////////////////////////////////////////////////////////
-          if (backup_L2_en && (needRecover || in_msg.Type == CoherenceRequestType:PUTX || 
-                                              in_msg.Type == CoherenceRequestType:UPGRADE)) {
-            DPRINTF(RubySlicc, "L1RequestL2Network_in::backup to L2::addr=%x\n"
-                             , in_msg.addr);
-            assert(is_invalid(cache_entry));
-            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr), in_msg.Type == CoherenceRequestType:PUTX)) {
+          if (backup_L2_en &&  needRecover && (in_msg.Type == CoherenceRequestType:GETS || 
+                                               in_msg.Type == CoherenceRequestType:GET_INSTR)) {//||
+                                               //in_msg.Type == CoherenceRequestType:GETX)) {
+            DPRINTF(RubySlicc, "L1RequestL2Network_in::backup to L2::addr=%x, isBkL2=%d\n"
+                             , in_msg.addr, isBkL2);
+            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr))) {
               // may be stall by other access
               trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
             }
-            trigger(L1Cache_request_to_l2_to_event(in_msg.Type, in_msg.addr,
-                                                   in_msg.Requestor, dir_entry, in_msg.Dirty,
-                                                   state, cache_entry),
+            trigger(L1Cache_request_to_l2_to_event(in_msg.Type, in_msg.addr,in_msg.Dirty, isBkL2, needRecover),
                         in_msg.addr, cache_entry, tbe);
           }
 
@@ -809,15 +860,24 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               in_msg.Type == CoherenceRequestType:UPGRADE ||
              (SF.cacheAvail(in_msg.addr) && needRecover)) {
             
-            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr), in_msg.Type == CoherenceRequestType:PUTX)) {
+            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr))) {
               // may be stall by other access
               trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
             }
-            trigger(L1Cache_request_bk_to_event(in_msg.Type, in_msg.addr,
-                                                in_msg.Requestor, dir_entry, in_msg.Dirty,
-                                                state, cache_entry),
+            if (backup_L2_en) {
+              //////////// maintain Directory in L2 ////////////
+              trigger(L1Cache_request_to_l2_to_event(in_msg.Type, in_msg.addr,in_msg.Dirty, isBkL2, needRecover),
                         in_msg.addr, cache_entry, tbe);
+            } else {
+              trigger(L1Cache_request_bk_to_event(in_msg.Type, in_msg.addr, in_msg.Dirty),
+                          in_msg.addr, cache_entry, tbe);
+            }
           } else {
+            if (isBackupStateinBusy(L2cache.getbkDirState(in_msg.addr))) {
+              // may be not need recover (different requestor) but
+              // is busy state, so pend
+              trigger(Event:Pend, in_msg.addr, cache_entry, tbe);
+            }
             // DirinBackup need recover to directory, which is not available
             Addr victim := SF.cacheProbe(in_msg.addr);
             CacheEntry L2cache_entry := getCacheEntry(victim);
@@ -928,9 +988,7 @@ machine(MachineType:L2Cache, "MESI Directory L2 Cache CMP")
               // need not to deallocate cache line
               DPRINTF(RubySlicc, "L1RequestL2Network_in::directory will back to cache::addr=%x, state=%d\n"
                                , in_msg.addr, state);
-              trigger(L1Cache_request_bk_to_event(in_msg.Type, in_msg.addr,
-                                                  in_msg.Requestor, dir_entry, in_msg.Dirty,
-                                                  state, cache_entry),
+              trigger(L1Cache_request_bk_to_event(in_msg.Type, in_msg.addr, in_msg.Dirty),
                       in_msg.addr, cache_entry, tbe);
             }
             // assert(false);//TODO: evict cache line

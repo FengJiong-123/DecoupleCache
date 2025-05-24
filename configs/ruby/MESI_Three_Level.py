@@ -87,6 +87,7 @@ def define_options(parser):
     parser.add_argument("--l2_cache_backup", type=int, default=0)
     parser.add_argument("--l2_dir_tag_per_line", type=int, default=1)
     parser.add_argument("--Cache_Block_num", type=int, default=0)
+    parser.add_argument("--backup_L2_en", type=int, default=0)
     parser.add_argument("--l0_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l1_transitions_per_cycle", type=int, default=32)
     parser.add_argument("--l2_transitions_per_cycle", type=int, default=4)
@@ -120,9 +121,13 @@ def create_system(
     l1_cntrl_nodes = []
     l2_cntrl_nodes = []
     dma_cntrl_nodes = []
+    backup_L2_en = False
+    if options.backup_L2_en == 1:
+        backup_L2_en = True
     print("l1 size:", options.l1d_size, " l1 assoc:", options.l1d_assoc)
     print("l2 size:", options.l2_size, " l2 assoc:", options.l2_assoc)
     print("SF size:", options.SF_size, " SF assoc:", options.SF_assoc)
+    print("bk enable:", backup_L2_en)
 
     assert options.num_cpus % options.num_clusters == 0
     num_cpus_per_cluster = options.num_cpus // options.num_clusters
@@ -204,13 +209,14 @@ def create_system(
                 assoc=options.l1d_assoc,
                 start_index_bit=block_size_bits,
                 is_icache=False,
-                new_replacement_policy=0,
+                new_replacement_policy=3,
             )
 
             l1_cntrl = L1Cache_Controller(
                 version=i * num_cpus_per_cluster + j,
                 cache=l1_cache,
                 l2_select_num_bits=l2_bits,
+                backup_L2_en=backup_L2_en,
                 cluster_id=i,
                 transitions_per_cycle=options.l1_transitions_per_cycle,
                 ruby_system=ruby_system,
@@ -279,7 +285,8 @@ def create_system(
                 l2_request_latency=20,
                 l2_response_latency=20,
                 to_l1_latency=20,
-                debugAddr=0x60a9bc0,
+                backup_L2_en=backup_L2_en,
+                debugAddr=0xba2f40,
                 cluster_id=i,
                 transitions_per_cycle=options.l2_transitions_per_cycle,
                 ruby_system=ruby_system,

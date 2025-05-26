@@ -1394,6 +1394,11 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     l_popL2RequestQueue;
   }
 
+  transition(IM, Fwd_GETX_Backup) {
+    fbd_bdcInvandSendDatatoRequestor;
+    l_popL2RequestQueue;
+  }
+
   transition({EE,SS}, Fwd_GETS, SS) {
     d_sendDataToRequestor;
     d2_sendDataToL2;
@@ -1701,7 +1706,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     z2_stallAndWaitL2Queue;
   }
 
-  transition({S_IL0, M_IL0, E_IL0, MM_IL0}, {Inv, Fwd_GETX, Fwd_GETS}) {
+  transition({S_IL0, M_IL0, E_IL0, MM_IL0}, {Inv, Fwd_GETX, Fwd_GETS, Fwd_GETS_BFalse}) {
     z2_stallAndWaitL2Queue;
   }
 

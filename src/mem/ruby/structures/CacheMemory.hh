@@ -157,7 +157,7 @@ class CacheMemory : public SimObject
     bool isPendingAddr(Addr address);
 
     // functions for cache backup
-    bool isFreetoBackup(Addr address);
+    bool isFreetoBackup(Addr address, bool is_aggressive);
     bool isDirinBackup(Addr address);
     std::string getbkDirState(Addr address);
     bool isDirBackupL2(Addr address);
@@ -168,8 +168,7 @@ class CacheMemory : public SimObject
     AbstractCacheEntry* insertDirBk(Addr address, MachineID owner, AbstractCacheEntry *entry);
     void removeDirBk(Addr address);
     void setDirState(Addr address, const std::string& state);
-    //Addr cacheProbetoBk(Addr address, AbstractCacheEntry *entry);
-    Addr cacheProbetoBk(Addr address);
+    Addr cacheProbetoBk(Addr address, bool is_aggressive);
     void reviseIndex(Addr address);
     //void updateSharerNum(Addr address, int sharersNum);
 
@@ -277,8 +276,12 @@ class CacheMemory : public SimObject
 
           statistics::Scalar m_demand_hits_in_dir;
           statistics::Scalar m_demand_hits_in_cache;
+          statistics::Scalar m_hits_in_cache_bkl2;
+          statistics::Scalar m_dir_switch_to_cache;
+          statistics::Scalar m_cache_recover_to_dir;
           statistics::Scalar m_demand_hits_recover;
           statistics::Scalar m_demand_misses;
+          statistics::Scalar m_demand_miss_to_cache;
           statistics::Formula m_demand_accesses;
 
           statistics::Scalar m_prefetch_hits;
@@ -294,6 +297,7 @@ class CacheMemory : public SimObject
 
           statistics::Scalar m_evictions;
           statistics::Scalar m_eviction_from_repair;
+          statistics::Scalar m_eviction_from_miss;
 
           // counters for cache eviction types
           statistics::Scalar m_evict_putx;
@@ -324,11 +328,16 @@ class CacheMemory : public SimObject
       void profileForwardinl1();
       void profileDemandHit();
       void profileDemandHitCache(bool need_recover);
+      void profileHitCacheBkL2();
+      void profileDirSwitchtoCache();
+      void profileCacheRecovertoDir();
       void profileDemandMiss();
+      void profileDemandMisstoCache();
       void profilePrefetchHit();
       void profilePrefetchMiss();
       void profileEvictions();
       void profileEvictionfromRepair();
+      void profileEvictionfromMiss();
       void profileBIDirty();
       void profileEvictionsType(int type);
       void profileRemainedEntry(Addr address);

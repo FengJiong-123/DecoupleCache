@@ -437,6 +437,7 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
                   trigger(Event:Fwd_GETS_BFalse, in_msg.addr, cache_entry, tbe);
                 }
               } else {
+                cache.profileForwardinl0();
                 trigger(Event:Fwd_GETS_BFalse, in_msg.addr, cache_entry, tbe);
               }
             }
@@ -811,7 +812,11 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
       assert(in_msg.Type == CoherenceRequestType:UPGRADE);
       assert(isCacheDir(cache_entry));
       assert(cache_entry.Sharers.count() > 1);
-      int broadcast_sharers_number := cache_entry.Sharers.count() - 2;
+      NetDest dest := cache_entry.Sharers;
+      dest.remove(machineID);
+      dest.remove(in_msg.Requestor);
+      int broadcast_sharers_number := dest.count();
+      //int broadcast_sharers_number := cache_entry.Sharers.count() - 2;
       DPRINTF(RubySlicc, "fbi_bdcInvAck::addr=%x, requestor=%d, broadcast_sharers_number=%d\n"
                        , address, in_msg.Requestor, broadcast_sharers_number);
       // enqueue(responseNetwork_out, ResponseMsg, l1_response_latency) {
@@ -1335,7 +1340,14 @@ machine(MachineType:L1Cache, "MESI Directory L1 Cache CMP")
     l_popL2RequestQueue;
   }
 
-  transition({SS,S}, PUTX_Drop) {
+  transition(SS, PUTX_Drop, EE) {
+    t_sendWBAck;
+    rss_sendBktoMT;
+    cc_cleanBackupL2;
+    l_popL2RequestQueue;
+  }
+
+  transition(S, PUTX_Drop, E) {
     t_sendWBAck;
     rss_sendBktoMT;
     cc_cleanBackupL2;

@@ -221,7 +221,7 @@ structure (CacheMemory, external = "yes") {
   AbstractCacheEntry lookup(Addr);
   bool isTagPresent(Addr);
   bool isPendingAddr(Addr);
-  bool isFreetoBackup(Addr);
+  bool isFreetoBackup(Addr, bool);
   bool isDirinBackup(Addr);
   std::string getbkDirState(Addr);
   bool isDirBackupL2(Addr);
@@ -232,8 +232,7 @@ structure (CacheMemory, external = "yes") {
   AbstractCacheEntry insertDirBk(Addr, MachineID, AbstractCacheEntry);
   void removeDirBk(Addr);
   void setDirState(Addr, std::string);
-  //Addr cacheProbetoBk(Addr, AbstractCacheEntry);
-  Addr cacheProbetoBk(Addr);
+  Addr cacheProbetoBk(Addr, bool);
   void reviseIndex(Addr);
   bool cacheBlock(Addr);
   Cycles getTagLatency();
@@ -258,11 +257,16 @@ structure (CacheMemory, external = "yes") {
   void profileForwardinl1();
   void profileDemandHit();
   void profileDemandHitCache(bool);
+  void profileHitCacheBkL2();
+  void profileDirSwitchtoCache();
+  void profileCacheRecovertoDir();
   void profileDemandMiss();
+  void profileDemandMisstoCache();
   void profilePrefetchHit();
   void profilePrefetchMiss();
   void profileEvictions();
   void profileEvictionfromRepair();
+  void profileEvictionfromMiss();
   void profileBIDirty();
   void profileEvictionsType(int);
   void profileRemainedEntry(Addr);

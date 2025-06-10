@@ -290,9 +290,16 @@ CacheMemory::cacheAvail(Addr address) const
     // auto itit = m_tag_index.find(0x1f0600);
     // if (itit != m_tag_index.end()) {DPRINTF(RubyCache, "cacheAvail::check for 0x1f0600 at pos=%d\n", itit->second);}
 
-    int set_used_line = 0;
+    int set_unused_line = 0;
     for (int i = 0; i < m_cache_assoc; i++) {
         AbstractCacheEntry* entry = m_cache[cacheSet][i];
+        // for debug only
+        // if (!entry) {
+        //     DPRINTF(RubyCache, "cacheAvail::this pos %d is free \n", i);
+        // } else {
+        //     DPRINTF(RubyCache, "cacheAvail::this pos %d has addr=%x with permission=%d, is backup %d\n"
+        //                      , i, entry->m_Address, entry->m_Permission, entry->m_is_backup);
+        // }
         if (entry != NULL) {
             if (entry->m_Address == address ||
                 entry->m_Permission == AccessPermission_NotPresent) {
@@ -303,14 +310,14 @@ CacheMemory::cacheAvail(Addr address) const
             }
         } else {
             //return true;
-            set_used_line ++;
+            set_unused_line ++;
         }
     }
-    DPRINTF(RubyCache, "cacheAvail::addr=%x, set=%x, pending size=%d, sharing size=%d, set_used_line=%d\n"
+    DPRINTF(RubyCache, "cacheAvail::addr=%x, set=%x, pending size=%d, sharing size=%d, set_unused_line=%d\n"
                      , address, cacheSet, m_set_pending_addr[cacheSet].size()
-                     , m_set_sharing_addr[cacheSet].size(), set_used_line);
-    assert(set_used_line <= m_cache_assoc);
-    return  (set_used_line > m_set_pending_addr[cacheSet].size()) && (set_used_line > m_set_sharing_addr[cacheSet].size());
+                     , m_set_sharing_addr[cacheSet].size(), set_unused_line);
+    assert(set_unused_line <= m_cache_assoc);
+    return  (set_unused_line > m_set_pending_addr[cacheSet].size()) && (set_unused_line > m_set_sharing_addr[cacheSet].size());
 }
 
 bool
@@ -436,8 +443,8 @@ CacheMemory::allocate(Addr address, AbstractCacheEntry *entry)
         // if (!set[i]) {
         //     DPRINTF(RubyCache, "allocate::this pos %d is free \n", i);
         // } else {
-        //     DPRINTF(RubyCache, "allocate::this pos %d has addr=%x with permission=%d\n"
-        //                      , i, set[i]->m_Address, set[i]->m_Permission);
+        //     DPRINTF(RubyCache, "allocate::this pos %d has addr=%x with permission=%d, is backup %d\n"
+        //                      , i, set[i]->m_Address, set[i]->m_Permission, set[i]->m_is_backup);
         // }
         if (!set[i] || set[i]->m_Permission == AccessPermission_NotPresent) {
             if (set[i] && (set[i] != entry)) {
@@ -874,7 +881,7 @@ CacheMemory::removePendingAddr(Addr address) {
 }
 
 bool
-CacheMemory::isFreetoBackup(Addr address) {
+CacheMemory::isFreetoBackup(Addr address, bool is_aggressive) {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
     if (m_cache_backup_entry == 0) {
@@ -884,17 +891,21 @@ CacheMemory::isFreetoBackup(Addr address) {
     // get back up entry number
     int backup_entry = 0;
     int free_entry = 0;
+    bool same_address = false;
     for (int i = 0; i < m_cache_assoc; i ++) {
         if (m_cache[cacheSet][i] == NULL) {
             free_entry ++;
             continue;
         }
+        if ((m_cache[cacheSet][i]->m_Address == address) && !m_cache[cacheSet][i]->m_is_backup){
+            same_address = true;
+        }
         if (m_cache[cacheSet][i]->m_is_backup) {
             backup_entry ++;
             assert(m_cache[cacheSet][i]->m_dir_bkup.size() <= m_dir_tag_per_line);
+            DPRINTF(RubyCache, "isFreetoBackup::backup entry existed::addr=%x, set=%x, pending size=%d\n"
+                             , address, cacheSet, m_set_pending_addr[cacheSet].size());
             if (m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
-                DPRINTF(RubyCache, "isFreetoBackup::backup entry existed::addr=%x, set=%x, pending size=%d\n"
-                                 , address, cacheSet, m_set_pending_addr[cacheSet].size());
                 return true;
             }
         }
@@ -902,7 +913,11 @@ CacheMemory::isFreetoBackup(Addr address) {
     assert(backup_entry <= m_cache_backup_entry);
     DPRINTF(RubyCache, "isFreetoBackup::need allocate a new entry::addr=%x, set=%x, pending size=%d, free entry=%d\n"
                      , address, cacheSet, m_set_pending_addr[cacheSet].size(), free_entry);
-    return (backup_entry < m_cache_backup_entry && free_entry > m_set_pending_addr[cacheSet].size());
+    if (is_aggressive) {
+        return (backup_entry < m_cache_backup_entry && (((m_cache_assoc-free_entry) > m_set_pending_addr[cacheSet].size()) || same_address));
+    } else {
+        return (backup_entry < m_cache_backup_entry && free_entry > m_set_pending_addr[cacheSet].size());
+    }
 }
 
 bool
@@ -1216,16 +1231,16 @@ CacheMemory::setDirState(Addr address, const std::string& state) {
 
 Addr
 //CacheMemory::cacheProbetoBk(Addr address, AbstractCacheEntry *entry)
-CacheMemory::cacheProbetoBk(Addr address)
+CacheMemory::cacheProbetoBk(Addr address, bool is_aggressive)
 {
     assert(address == makeLineAddress(address));
     int64_t cacheSet = addressToCacheSet(address);
-    //DPRINTF(RubyCache, "cacheProbetoBk::addr=%x, cacheSet=%x\n",address, cacheSet);
     Tick least_tick = curTick() + 1;
     int victim_pos = m_cache_assoc;
     //int null_pos = m_cache_assoc;
     // get back up entry number
     // int backup_entry = 0;
+    int free_entry = 0;
     for (int i = 0; i < m_cache_assoc; i ++) {
         if (m_cache[cacheSet][i] != NULL) {
             DPRINTF(RubyCache, "cacheProbetoBk::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d, m_is_backup=%d, dir entry size=%d\n"
@@ -1256,7 +1271,11 @@ CacheMemory::cacheProbetoBk(Addr address)
             DPRINTF(RubyCache, "cacheProbetoBk::entry is null, pos=%d\n", i);
             // could return
             // null_pos = i;
-            return -1;
+            if (!is_aggressive) {
+                return -1;
+            } else {
+                free_entry ++;
+            }
         }
     }
     // if (null_pos < m_cache_assoc && backup_entry < m_dir_tag_per_line) {
@@ -1273,6 +1292,12 @@ CacheMemory::cacheProbetoBk(Addr address)
     //     m_cache[cacheSet][null_pos]->m_is_backup = true;
     //     return -1;
     // }
+    DPRINTF(RubyCache, "cacheProbetoBk::cacheSet=%x, free_entry=%d, pending=%d\n"
+                     , cacheSet, free_entry, m_set_pending_addr[cacheSet].size());
+    if (free_entry > m_set_pending_addr[cacheSet].size()) {
+        assert(is_aggressive);
+        return -1;
+    }
 
     assert(victim_pos < m_cache_assoc);
     assert(m_cache[cacheSet][victim_pos] != NULL);
@@ -1348,8 +1373,12 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
                                       "transaction"),
       ADD_STAT(m_demand_hits_in_dir, "Number of cache demand hits in SF"),
       ADD_STAT(m_demand_hits_in_cache, "Number of cache demand hits in cache"),
+      ADD_STAT(m_hits_in_cache_bkl2, "Number of cache demand hits in cache, will back up to l2"),
+      ADD_STAT(m_dir_switch_to_cache, "Number of directory will switch to cache"),
+      ADD_STAT(m_cache_recover_to_dir, "Number of cache recover to dir"),
       ADD_STAT(m_demand_hits_recover, "Number of cache demand hits in cache, and need recovering"),
       ADD_STAT(m_demand_misses, "Number of cache demand misses"),
+      ADD_STAT(m_demand_miss_to_cache, "Number of cache demand misses, backup to cache"),
       ADD_STAT(m_demand_accesses, "Number of cache demand accesses",
                m_demand_hits_in_dir + m_demand_hits_in_cache + m_demand_misses),
       ADD_STAT(m_prefetch_hits, "Number of cache prefetch hits"),
@@ -1363,6 +1392,7 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
     //            m_forward_getss_in_l0 + m_forward_getss_in_l1),
       ADD_STAT(m_evictions, "Number of evictions"),
       ADD_STAT(m_eviction_from_repair, "Number of eviction from directory repair"),
+      ADD_STAT(m_eviction_from_miss, "Number of eviction from directory repair"),
       ADD_STAT(m_evict_putx, "Number of evictions from PUTX"),
       ADD_STAT(m_evict_dir_evict, "Number of evictions from directory eviction"),
       ADD_STAT(m_evict_dir_evict_dirty, "Number of evictions from directory eviction and is dirty"),
@@ -1636,9 +1666,33 @@ CacheMemory::profileDemandHitCache(bool need_recover)
 }
 
 void
+CacheMemory::profileHitCacheBkL2()
+{
+    cacheMemoryStats.m_hits_in_cache_bkl2++;
+}
+
+void
+CacheMemory::profileDirSwitchtoCache()
+{
+    cacheMemoryStats.m_dir_switch_to_cache++;
+}
+
+void
+CacheMemory::profileCacheRecovertoDir()
+{
+    cacheMemoryStats.m_cache_recover_to_dir++;
+}
+
+void
 CacheMemory::profileDemandMiss()
 {
     cacheMemoryStats.m_demand_misses++;
+}
+
+void
+CacheMemory::profileDemandMisstoCache()
+{
+    cacheMemoryStats.m_demand_miss_to_cache++;
 }
 
 void
@@ -1663,6 +1717,12 @@ void
 CacheMemory::profileEvictionfromRepair()
 {
     cacheMemoryStats.m_eviction_from_repair++;
+}
+
+void
+CacheMemory::profileEvictionfromMiss()
+{
+    cacheMemoryStats.m_eviction_from_miss++;
 }
 
 void

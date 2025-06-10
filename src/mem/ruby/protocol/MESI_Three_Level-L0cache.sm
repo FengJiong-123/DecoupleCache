@@ -990,7 +990,7 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
     l_popRequestQueue;
   }
 
-  transition(E, {Fwd_GETS, Fwd_GET_INSTR}, S) {
+  transition({E,S}, {Fwd_GETS, Fwd_GET_INSTR}, S) {
     forward_eviction_to_cpu;
     f_sendShareDataToL1;
     l_popRequestQueue;

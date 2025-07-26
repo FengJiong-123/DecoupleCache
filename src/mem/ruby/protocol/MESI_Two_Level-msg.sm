@@ -47,6 +47,8 @@ enumeration(CoherenceRequestType, desc="...") {
   EVC, desc="cache eviction";
   EVC_DIR, desc="directory eviction";
   SW_DIR, desc="switch directory";
+
+  UP_SHARER, desc="update accurate sharers";
 }
 
 // CoherenceResponseType
@@ -65,6 +67,7 @@ enumeration(CoherenceResponseType, desc="...") {
   INVBK, desc="Invalidate from L2";
   BK_to_SS, desc="Bk to SS";
   BK_to_MT, desc="Bk to MT";
+  BK_to_clean, desc="clean LLC Bk";
 }
 
 // RequestMsg
@@ -79,6 +82,9 @@ structure(RequestMsg, desc="...", interface="Message") {
   int Len;
   bool Dirty, default="false",  desc="Dirty bit";
   bool backupL2, default="false",  desc="forward request will backup to l2";
+  bool PutisDir, default="false",  desc="put directory to L2";
+  NetDest Sharers,              desc="putted directory member";
+  MachineID nearstAccID,        desc="putted directory nearest access ID";
   PrefetchBit Prefetch,         desc="Is this a prefetch request";
   //bool countNot, default="true",desc="not count";
 
@@ -109,6 +115,7 @@ structure(ResponseMsg, desc="...", interface="Message") {
   bool backupL2, default="false",  desc="forward request backup in l2 successfully";
   bool reviseOwner, default="false",  desc="forward request backup in l2 fail, need revise owner";
   int AckCount, default="0",  desc="number of acks in this message";
+  NetDest Sharers,              desc="directory member of backup L2";
   MessageSizeType MessageSize,  desc="size category of the message";
 
   bool functionalRead(Packet *pkt) {

@@ -134,30 +134,6 @@ action(c_exclusiveReplacement, "c", desc="Send data to memory") {
     }
 }
 
-// action(c_exclusiveCleanReplacement, "cc", desc="Send ack to memory for clean replacement") {
-//     enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
-//         DPRINTF(RubySlicc, "c_exclusiveCleanReplacement::addr=%x\n", address);
-//         out_msg.addr := address;
-//         out_msg.Type := CoherenceResponseType:ACK;
-//         out_msg.Sender := machineID;
-//         out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-//         out_msg.MessageSize := MessageSizeType:Response_Control;
-//     }
-// }
-
-// action(ct_exclusiveReplacementFromTBE, "ct", desc="Send data to memory") {
-//     enqueue(responseL2Network_out, ResponseMsg, l2_response_latency) {
-//         assert(is_valid(tbe));
-//         out_msg.addr := address;
-//         out_msg.Type := CoherenceResponseType:MEMORY_DATA;
-//         out_msg.Sender := machineID;
-//         out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
-//         out_msg.DataBlk := tbe.DataBlk;
-//         out_msg.Dirty := tbe.Dirty;
-//         out_msg.MessageSize := MessageSizeType:Response_Data;
-//     }
-// }
-
 action(d_sendDataToRequestor, "d", desc="Send data from cache to reqeustor") {
     peek(L1RequestL2Network_in, RequestMsg) {
         DPRINTF(RubySlicc, "d_sendDataToRequestor::addr=%x, Type=%d\n"
@@ -585,29 +561,15 @@ action(mr_writeDataToCacheFromPutxinBK, "mrbk", desc="Write data from putx queue
         DPRINTF(RubySlicc, "mr_writeDataToCacheFromPutxinBK::addr=%x, dirty=%d\n"
                          , in_msg.addr, in_msg.Dirty);
         assert(in_msg.Dirty);
-        // need to allocate cache
         assert(is_invalid(cache_entry));
-        assert(!L2cache.cacheAvail(address));
-
-        State orgState := getState(tbe, cache_entry, in_msg.addr);
-        // need replacement
-        Addr victim := L2cache.cacheProbe(in_msg.addr);
-        CacheEntry L2cache_entry := getCacheEntry(victim);
-        TBE tbe_victim := TBEs[victim];
-        DPRINTF(RubySlicc, "mr_writeDataToCacheFromPutxinBK::Cache victim::addr=%x, state=%d, victim=%x, state=%d\n"
-                            , in_msg.addr, orgState, victim, getState(tbe_victim, L2cache_entry, victim));
-        stall_and_wait(L1RequestL2Network_in, victim);
-        // trigger cache replacement by trigger port
-        enqueue(triggerOutPort, RequestMsg, 0) {
-            out_msg.addr := victim;
-            out_msg.Type := CoherenceRequestType:EVC;
-            out_msg.AccessMode := in_msg.AccessMode;
-            out_msg.MessageSize := in_msg.MessageSize;
-            out_msg.DataBlk := L2cache_entry.DataBlk;
-            out_msg.Dirty := L2cache_entry.Dirty;
-            out_msg.Len := 1;
-        }
-        L2cache.savePendingAddr(in_msg.addr, machineID);
+        assert(in_msg.PutisDir);
+        assert(L2cache.cacheAvail(address)); // temp flag
+        // otherwise maybe save to memory
+        set_cache_entry(L2cache.allocate(address, new CacheEntry));
+        cache_entry.DataBlk := in_msg.DataBlk;
+        cache_entry.Dirty := in_msg.Dirty;
+        L2cache.removePendingAddr(in_msg.addr);
+        
     }
 }
 
@@ -1001,6 +963,17 @@ action(ll_clearSharers, "\l", desc="Remove all L1 sharers from list") {
     }
 }
 
+action(la_addSharersFromPutx, "\la", desc="add all L1 sharers from putx") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DPRINTF(RubySlicc, "la_addSharersFromPutx::addr=%x, type=%d, sharers=%s\n"
+                         , address, in_msg.Type, in_msg.Sharers);
+        assert(in_msg.Sharers.count() > 1);
+        DirEntry dir_entry := getDirEntry(address);
+        assert(is_valid(dir_entry));
+        dir_entry.Sharers := in_msg.Sharers;
+    }
+}
+
 action(mmd_markExclusiveFromDir, "\md", desc="set the exclusive owner") {
     DirEntry dir_entry := getDirEntry(address);
     assert(is_valid(dir_entry));
@@ -1057,6 +1030,24 @@ action(ro_reviseOwnerfromSender, "\roS", desc="revise Owner in bk if needed") {
     }
 }
 
+action(ro_reviseOwnerfromPutx, "\roPut", desc="revise Owner in bk from putx") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DPRINTF(RubySlicc, "ro_reviseOwnerfromPutx::addr=%x, reviseOwner=%s\n"
+                         , address, in_msg.Sharers);
+        L2cache.setOwnerinBackup(address, in_msg.Sharers.smallestElement());
+    }
+}
+
+action(ro_reviseOwnerfrombpL2, "\robpL2", desc="revise Owner in bk from bpL2") {
+    peek(responseL2Network_in, ResponseMsg) {
+        assert(in_msg.Type == CoherenceResponseType:BK_to_MT);
+        assert(in_msg.Sharers.count() == 1);
+        DPRINTF(RubySlicc, "ro_reviseOwnerfrombpL2::addr=%x, reviseOwner=%s\n"
+                         , address, in_msg.Sharers);
+        L2cache.setOwnerinBackup(address, in_msg.Sharers.smallestElement());
+    }
+}
+
 action(sts_setBkStateISS, "\stsISS", desc="set back up state as ISS") {
     DPRINTF(RubySlicc, "sts_setBkStateISS::addr=%x\n", address);
     L2cache.setDirState(address, "ISS");
@@ -1085,6 +1076,16 @@ action(sts_setBkStateMTMB, "\stsMTMB", desc="set back up state as MT_MB") {
 action(sts_setBkStateMT, "\stsMT", desc="set back up state as MT") {
     DPRINTF(RubySlicc, "sts_setBkStateMT::addr=%x\n", address);
     L2cache.setDirState(address, "MT");
+}
+
+action(sts_setBkStatehasRO, "\stshasRO", desc="set back up state as hasRO") {
+    DPRINTF(RubySlicc, "sts_setBkStatehasRO::addr=%x\n", address);
+    L2cache.setDirState(address, "hasRO");
+}
+
+action(sts_setBkStateToClean, "\stsTC", desc="set back up state to clean") {
+    DPRINTF(RubySlicc, "sts_setBkStateToClean::addr=%x\n", address);
+    L2cache.setDirState(address, "ToClean");
 }
 
 action(sts_setBkStateM_I, "\stsM_I", desc="set back up state as M_I") {
@@ -1122,6 +1123,36 @@ action(rp_removeCachePendingAddr, "rp", desc="remove pending address") {
     L2cache.removePendingAddr(address);
 }
 
+action(us_updateSharer, "us", desc="update accurate sharers in LLC") {
+    peek(L1RequestL2Network_in, RequestMsg) {
+        DirEntry dir_entry := getDirEntry(address);
+        assert(is_valid(dir_entry));
+        DPRINTF(RubySlicc, "us_updateSharer::addr=%x, dir Sharers=%s, update Sharers=%s\n"
+                        , address, dir_entry.Sharers, in_msg.Sharers);
+        dir_entry.Sharers := dir_entry.Sharers.AND(in_msg.Sharers);
+        if (dir_entry.Sharers.count() == 0) {
+            assert(SF.isTagPresent(address));
+            // set state before remove
+            if (in_msg.Dirty) {
+                dir_entry.DirState := State:M;
+            } else {
+                dir_entry.DirState := State:NP;
+                // if state is SS and dirty, which means LLC do not maintain the
+                // RW permission, we need to silent update directory
+                enqueue(responseL2Network_out, ResponseMsg, 1) {
+                    out_msg.addr := address;
+                    out_msg.Type := CoherenceResponseType:ACK_Silent;
+                    out_msg.Sender := machineID;
+                    out_msg.Destination.add(mapAddressToMachine(address, MachineType:Directory));
+                    out_msg.MessageSize := MessageSizeType:Response_Control;
+                }
+                //}
+            }
+            SF.deallocate(address);
+        }
+    }
+  }
+
 action(zz_stallAndWaitL1RequestQueue, "zz", desc="recycle L1 request queue") {
     stall_and_wait(L1RequestL2Network_in, address);
 }
@@ -1132,6 +1163,10 @@ action(zzt_stallAndWaitTriggerQueue, "zzt", desc="recycle L1 request queue") {
 
 action(zn_recycleResponseNetwork, "zn", desc="recycle memory request") {
     responseL2Network_in.recycle(clockEdge(), cyclesToTicks(recycle_latency));
+}
+
+action(zl_recycleRequestNetwork, "zl", desc="recycle request") {
+    L1RequestL2Network_in.recycle(clockEdge(), cyclesToTicks(recycle_latency));
 }
 
 action(kd_wakeUpDependents, "kd", desc="wake-up dependents") {
@@ -1158,9 +1193,18 @@ transition({MT,M,NP,BK}, Pend){
 transition({NP,M,M_I,S_I,I_I,BK}, Pop_ReqIn){
 }
 
+transition(BK, Recycle_Request){
+    zl_recycleRequestNetwork;
+}
+
 transition({I_I, S_I, ISS, IS, IM, SS_MB, MT_MB, MT_IIB, MT_IB, MT_SB},  
            {SF_Replacement_withC, SF_Replacement}){
     zzt_stallAndWaitTriggerQueue;
+}
+
+transition(SS, UPDATE_Sharers){
+    us_updateSharer;
+    jj_popL1RequestQueue;
 }
 
 transition({NP, SS, M, MT}, L1_PUTX_front) {
@@ -1175,8 +1219,74 @@ transition(BK, L1_PUTX_front_BKL2) {
     jj_popL1RequestQueue;
 }
 
+transition(BK, L1_PUTXDirPtr_cleanBK) {
+    t_sendWBAck;
+    k_removeDirBk;
+    kd_wakeUpDependents;
+    jj_popL1RequestQueue;
+}
+
+transition(BK, L1_PUTXDirPtr_cleanBK_dirty, M) {
+    t_sendWBAck;
+    k_removeDirBk;
+    mr_writeDataToCacheFromPutxinBK;
+    kd_wakeUpDependents;
+    jj_popL1RequestQueue;
+}
+
+transition(BK, L1_PUTXDirPtr_front_BKL2) {
+    t_sendWBAck;
+    ro_reviseOwnerfromPutx;
+    sts_setBkStateMT;
+    rbk_removeBkisbackupL2;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+}
+
+transition(BK, L1_PUTXDirPtr_front_BKL2_hasRO) {
+    t_sendWBAck;
+    sts_setBkStateMT;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+    kd_wakeUpDependents;
+}
+
+transition(BK, L1_PUTXDirPtr_noRev_BKL2) {
+    t_sendWBAck;
+    set_setMRU;
+    uu_profileHit;
+    jj_popL1RequestQueue;
+}
+
+transition(BK, L1_PUTXDirVec_front_BKL2, SS) {
+    t_sendWBAck;
+    qq_allocateDirBlock;
+    ll_clearSharers;
+    la_addSharersFromPutx;
+    k_removeDirBk;
+    set_setMRU;
+    jj_popL1RequestQueue;
+}
+
 transition(BK, BK_Putx_to_MT) {
     sts_setBkStateMT;
+    rbk_removeBkisbackupL2;
+    kd_wakeUpDependents;
+    o_popIncomingResponseQueue;
+}
+
+transition(BK, BK_Putx_to_MT_From_bpL2) {
+    sts_setBkStatehasRO;
+    rbk_removeBkisbackupL2;
+    ro_reviseOwnerfrombpL2;
+    kd_wakeUpDependents;
+    o_popIncomingResponseQueue;
+}
+
+transition(BK, BK_Putx_to_clean) {
+    sts_setBkStateToClean;
     rbk_removeBkisbackupL2;
     kd_wakeUpDependents;
     o_popIncomingResponseQueue;

@@ -65,6 +65,7 @@ machine(MachineType:L1Cache, "AMD Hammer-like protocol")
     S, AccessPermission:Read_Only, desc="Shared";
     O, AccessPermission:Read_Only, desc="Owned";
     M, AccessPermission:Read_Only, desc="Modified (dirty)";
+    E, AccessPermission:Read_Only, desc="Exclusive"; // for debug
     MM, AccessPermission:Read_Write, desc="Modified (dirty and locally modified)";
 
     // Base states, locked and ready to service the mandatory queue
@@ -147,6 +148,7 @@ machine(MachineType:L1Cache, "AMD Hammer-like protocol")
     DataBlock DataBlk,       desc="data for the block";
     bool FromL2, default="false", desc="block just moved from L2";
     bool AtomicAccessed, default="false", desc="block just moved from L2";
+    bool isDir, default="false",   desc="is directory";
   }
 
   // TBE fields

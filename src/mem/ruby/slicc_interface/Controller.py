@@ -58,7 +58,7 @@ class RubyController(ClockedObject):
     )
     buffer_size = Param.UInt32(0, "max buffer size 0 means infinite")
 
-    recycle_latency = Param.Cycles(10, "")
+    recycle_latency = Param.Cycles(1, "")
     number_of_TBEs = Param.Int(256, "")
     ruby_system = Param.RubySystem("")
 

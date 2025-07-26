@@ -958,6 +958,7 @@ machine(MachineType:L0Cache, "MESI Directory L0 Cache")
 
   transition(S, {L0_Replacement,PF_L0_Replacement}, I) {
     forward_eviction_to_cpu;
+    g_issuePUTX;
     ff_deallocateCacheBlock;
   }
 

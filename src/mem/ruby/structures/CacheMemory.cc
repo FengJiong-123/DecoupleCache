@@ -286,20 +286,9 @@ CacheMemory::cacheAvail(Addr address) const
         return true;
     }
 
-    //debug
-    // auto itit = m_tag_index.find(0x1f0600);
-    // if (itit != m_tag_index.end()) {DPRINTF(RubyCache, "cacheAvail::check for 0x1f0600 at pos=%d\n", itit->second);}
-
     int set_unused_line = 0;
     for (int i = 0; i < m_cache_assoc; i++) {
         AbstractCacheEntry* entry = m_cache[cacheSet][i];
-        // for debug only
-        // if (!entry) {
-        //     DPRINTF(RubyCache, "cacheAvail::this pos %d is free \n", i);
-        // } else {
-        //     DPRINTF(RubyCache, "cacheAvail::this pos %d has addr=%x with permission=%d, is backup %d\n"
-        //                      , i, entry->m_Address, entry->m_Permission, entry->m_is_backup);
-        // }
         if (entry != NULL) {
             if (entry->m_Address == address ||
                 entry->m_Permission == AccessPermission_NotPresent) {
@@ -631,13 +620,11 @@ CacheMemory::cacheProbe(Addr address) const
             if (m_cache[cacheSet][i] != NULL) {
                 [[maybe_unused]] const L1Cache_Entry* L1cacheEntry;
                 L1cacheEntry = dynamic_cast<const L1Cache_Entry *>(m_cache[cacheSet][i]);
-                DPRINTF(RubyCache, "cacheProbe::addr=%x, pos=%d, lastAccess=%lld, waitEvict=%d, isDir=%d, state=%d\n"
+                DPRINTF(RubyCache, "cacheProbe::addr=%x, pos=%d, lastAccess=%lld, isDir=%d, state=%d, sharer num=%d\n"
                                  , m_cache[cacheSet][i]->m_Address, i, m_cache[cacheSet][i]->getLastAccess()
-                                 , m_cache[cacheSet][i]->m_waitEvict, L1cacheEntry->m_isDir, L1cacheEntry->m_CacheState);
+                                 , L1cacheEntry->m_isDir, L1cacheEntry->m_CacheState, L1cacheEntry->m_Sharers.count());
                 assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
-                if (L1cacheEntry->m_isDir &&
-                   (L1cacheEntry->m_CacheState == L1Cache_State_S || L1cacheEntry->m_CacheState == L1Cache_State_E ||
-                    L1cacheEntry->m_CacheState == L1Cache_State_M || L1cacheEntry->m_CacheState == L1Cache_State_SM)) {
+                if (L1cacheEntry->m_isDir) { 
                     continue;
                 }
                 if (m_cache[cacheSet][i]->getLastAccess() < least_tick) {
@@ -646,6 +633,55 @@ CacheMemory::cacheProbe(Addr address) const
                 }
             } else {
                 DPRINTF(RubyCache, "cacheProbe::entry is null, pos=%d\n", i);
+            }
+        }
+        if (victim_pos == m_cache_assoc) {
+            // find non-directory fails
+            // priority sharer num < 3
+            for (int i = 0; i < m_cache_assoc; i ++) {
+                if (m_cache[cacheSet][i] != NULL) {
+                    [[maybe_unused]] const L1Cache_Entry* L1cacheEntry;
+                    L1cacheEntry = dynamic_cast<const L1Cache_Entry *>(m_cache[cacheSet][i]);
+                    assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
+                    if (L1cacheEntry->m_isDir) { 
+                        if (L1cacheEntry->m_CacheState == L1Cache_State_S || L1cacheEntry->m_CacheState == L1Cache_State_E ||
+                            L1cacheEntry->m_CacheState == L1Cache_State_M || L1cacheEntry->m_CacheState == L1Cache_State_SM) {
+                            continue;
+                        } else if (L1cacheEntry->m_CacheState == L1Cache_State_SS) {
+                            int sharer_num = L1cacheEntry->m_Sharers.count();
+                            assert(sharer_num > 0);
+                            if (L1cacheEntry->m_Sharers.count() < 3) {
+                                if (m_cache[cacheSet][i]->getLastAccess() < least_tick) {
+                                    least_tick = m_cache[cacheSet][i]->getLastAccess();
+                                    victim_pos = i;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (victim_pos == m_cache_assoc) {
+            // priority sharer num >= 3
+            for (int i = 0; i < m_cache_assoc; i ++) {
+                if (m_cache[cacheSet][i] != NULL) {
+                    [[maybe_unused]] const L1Cache_Entry* L1cacheEntry;
+                    L1cacheEntry = dynamic_cast<const L1Cache_Entry *>(m_cache[cacheSet][i]);
+                    assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
+                    if (L1cacheEntry->m_isDir) { 
+                        if (L1cacheEntry->m_CacheState == L1Cache_State_S || L1cacheEntry->m_CacheState == L1Cache_State_E ||
+                            L1cacheEntry->m_CacheState == L1Cache_State_M || L1cacheEntry->m_CacheState == L1Cache_State_SM) {
+                            continue;
+                        } else if (L1cacheEntry->m_CacheState == L1Cache_State_SS) {
+                            int sharer_num = L1cacheEntry->m_Sharers.count();
+                            assert(sharer_num > 2);
+                            if (m_cache[cacheSet][i]->getLastAccess() < least_tick) {
+                                least_tick = m_cache[cacheSet][i]->getLastAccess();
+                                victim_pos = i;
+                            }
+                        }
+                    }
+                }
             }
         }
         assert(victim_pos < m_cache_assoc);
@@ -1043,7 +1079,8 @@ CacheMemory::removeDirBackupL2(Addr address) {
         if (m_cache[cacheSet][i]->m_is_backup) {
             for (auto it = m_cache[cacheSet][i]->m_dir_bkup.begin(); it != m_cache[cacheSet][i]->m_dir_bkup.end(); it ++) {
                 if ((*it)->address == address) {
-                    assert((*it)->state == "MT");
+                    assert((*it)->state == "MT" || (*it)->state == "ToClean"
+                                                || (*it)->state == "hasRO");
                     (*it)->backupL2 = false;
                     return;
                 }
@@ -1374,6 +1411,7 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
       ADD_STAT(m_demand_hits_in_dir, "Number of cache demand hits in SF"),
       ADD_STAT(m_demand_hits_in_cache, "Number of cache demand hits in cache"),
       ADD_STAT(m_hits_in_cache_bkl2, "Number of cache demand hits in cache, will back up to l2"),
+      ADD_STAT(m_putx_hits_in_cache_owner, "Number of cache demand hits in cache owner"),
       ADD_STAT(m_dir_switch_to_cache, "Number of directory will switch to cache"),
       ADD_STAT(m_cache_recover_to_dir, "Number of cache recover to dir"),
       ADD_STAT(m_demand_hits_recover, "Number of cache demand hits in cache, and need recovering"),
@@ -1393,6 +1431,7 @@ CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)
       ADD_STAT(m_evictions, "Number of evictions"),
       ADD_STAT(m_eviction_from_repair, "Number of eviction from directory repair"),
       ADD_STAT(m_eviction_from_miss, "Number of eviction from directory repair"),
+      ADD_STAT(m_eviction_from_L1Putx, "Number of eviction from directory repair"),
       ADD_STAT(m_evict_putx, "Number of evictions from PUTX"),
       ADD_STAT(m_evict_dir_evict, "Number of evictions from directory eviction"),
       ADD_STAT(m_evict_dir_evict_dirty, "Number of evictions from directory eviction and is dirty"),
@@ -1672,6 +1711,12 @@ CacheMemory::profileHitCacheBkL2()
 }
 
 void
+CacheMemory::profilePutxHitCacheOwner()
+{
+    cacheMemoryStats.m_putx_hits_in_cache_owner++;
+}
+
+void
 CacheMemory::profileDirSwitchtoCache()
 {
     cacheMemoryStats.m_dir_switch_to_cache++;
@@ -1723,6 +1768,12 @@ void
 CacheMemory::profileEvictionfromMiss()
 {
     cacheMemoryStats.m_eviction_from_miss++;
+}
+
+void
+CacheMemory::profileEvictionfromL1Putx()
+{
+    cacheMemoryStats.m_eviction_from_L1Putx++;
 }
 
 void

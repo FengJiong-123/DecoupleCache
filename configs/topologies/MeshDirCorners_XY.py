@@ -53,6 +53,8 @@ class MeshDirCorners_XY(SimpleTopology):
             l2_pos = [1,3,4,6,9,11,12,14]
         elif num_routers == 64 and num_l2caches == 8:
             l2_pos = [1,5,18,22,43,47,56,60]
+        elif num_routers == 1 and num_l2caches == 1:
+            l2_pos = [0]
         else:
             # not support other topo
             assert(False)

@@ -286,7 +286,7 @@ def create_system(
                 l2_response_latency=20,
                 to_l1_latency=20,
                 backup_L2_en=backup_L2_en,
-                debugAddr=0xba2f40,
+                debugAddr=0x7e1300,
                 cluster_id=i,
                 transitions_per_cycle=options.l2_transitions_per_cycle,
                 ruby_system=ruby_system,

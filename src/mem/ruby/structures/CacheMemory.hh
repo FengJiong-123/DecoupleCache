@@ -277,6 +277,7 @@ class CacheMemory : public SimObject
           statistics::Scalar m_demand_hits_in_dir;
           statistics::Scalar m_demand_hits_in_cache;
           statistics::Scalar m_hits_in_cache_bkl2;
+          statistics::Scalar m_putx_hits_in_cache_owner;
           statistics::Scalar m_dir_switch_to_cache;
           statistics::Scalar m_cache_recover_to_dir;
           statistics::Scalar m_demand_hits_recover;
@@ -298,6 +299,7 @@ class CacheMemory : public SimObject
           statistics::Scalar m_evictions;
           statistics::Scalar m_eviction_from_repair;
           statistics::Scalar m_eviction_from_miss;
+          statistics::Scalar m_eviction_from_L1Putx;
 
           // counters for cache eviction types
           statistics::Scalar m_evict_putx;
@@ -329,6 +331,7 @@ class CacheMemory : public SimObject
       void profileDemandHit();
       void profileDemandHitCache(bool need_recover);
       void profileHitCacheBkL2();
+      void profilePutxHitCacheOwner();
       void profileDirSwitchtoCache();
       void profileCacheRecovertoDir();
       void profileDemandMiss();
@@ -338,6 +341,7 @@ class CacheMemory : public SimObject
       void profileEvictions();
       void profileEvictionfromRepair();
       void profileEvictionfromMiss();
+      void profileEvictionfromL1Putx();
       void profileBIDirty();
       void profileEvictionsType(int type);
       void profileRemainedEntry(Addr address);

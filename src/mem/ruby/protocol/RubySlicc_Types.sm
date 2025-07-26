@@ -258,6 +258,7 @@ structure (CacheMemory, external = "yes") {
   void profileDemandHit();
   void profileDemandHitCache(bool);
   void profileHitCacheBkL2();
+  void profilePutxHitCacheOwner();
   void profileDirSwitchtoCache();
   void profileCacheRecovertoDir();
   void profileDemandMiss();
@@ -267,6 +268,7 @@ structure (CacheMemory, external = "yes") {
   void profileEvictions();
   void profileEvictionfromRepair();
   void profileEvictionfromMiss();
+  void profileEvictionfromL1Putx();
   void profileBIDirty();
   void profileEvictionsType(int);
   void profileRemainedEntry(Addr);

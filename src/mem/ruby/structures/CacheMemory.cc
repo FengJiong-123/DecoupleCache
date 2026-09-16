@@ -386,15 +386,6 @@ CacheMemory::cacheBlock(Addr address) {
     if (m_set_pending_addr[cacheSet].size() < m_cache_assoc) {
         return false;
     }
-    // for (auto it = m_set_pending_addr[cacheSet].begin(); it != m_set_pending_addr[cacheSet].end();) {
-    //     if ((*it) == address) {
-    //         DPRINTF(RubyCache, "cacheBlock::hit pending::addr=%x, set=%x\n"
-    //                          , address, cacheSet);
-    //         return false;
-    //     } else {
-    //         it ++;
-    //     }
-    // }
     auto it = m_set_pending_addr[cacheSet].find(address);
     if (it != m_set_pending_addr[cacheSet].end()) {
         DPRINTF(RubyCache, "cacheBlock::hit pending::addr=%x, set=%x\n"
@@ -481,23 +472,6 @@ CacheMemory::deallocate(Addr address)
     m_cache[cache_set][way] = NULL;
     m_tag_index.erase(address);
 }
-
-// int64_t cacheSet = addressToCacheSet(address);
-//     int pos = m_cache_assoc;
-//     for (int i = 0; i < m_cache_assoc; i++) {
-//         if (m_cache[cacheSet][i] == NULL) {
-//             continue;
-//         }
-//         if (m_cache[cacheSet][i]->m_Address == address) {
-//             pos = i;
-//             break;
-//         }
-//     }
-//     delete & m_cache[cacheSet][pos];
-//     m_cache[cacheSet][pos] = NULL;
-//     m_tag_index.erase(address);
-//     DPRINTF(RubyCache, "deallocate::addr=%x, cacheSet=%d, way=%d\n"
-//                      , address, cacheSet, pos);
 
 // Returns with the physical address of the conflicting cache line
 Addr
@@ -885,7 +859,6 @@ CacheMemory::savePendingAddr(Addr address, MachineID machineID)
     if (it != m_set_pending_addr[cacheSet].end()) {
         return;
     }
-    //m_set_pending_addr[cacheSet].push_back(address);
     m_set_pending_addr[cacheSet][address] = machineID;
 }
 
@@ -1176,7 +1149,6 @@ CacheMemory::insertDirBk(Addr address, MachineID owner, AbstractCacheEntry *entr
     }
     if (insert_pos < m_cache_assoc && back_entry < m_cache_backup_entry) {
         assert(m_cache[cacheSet][insert_pos] == NULL);
-        //AbstractCacheEntry* new_cache_entry = new AbstractCacheEntry;
         m_cache[cacheSet][insert_pos] = entry;  // Init entry
         m_cache[cacheSet][insert_pos]->m_Address = -1;
         m_cache[cacheSet][insert_pos]->m_Permission = AccessPermission_Invalid;
@@ -1226,7 +1198,6 @@ CacheMemory::removeDirBk(Addr address) {
                 // clean up the back up entry
                 DPRINTF(RubyCache, "removeDirBk::delete entry::addr=%x, set=%x\n"
                                  , address, cacheSet);
-                //AbstractCacheEntry* entry = m_cache[cacheSet][i];
                 assert(m_cache[cacheSet][i] != nullptr);
                 m_cache[cacheSet][i]->setLastAccess(0);
                 delete m_cache[cacheSet][i];
@@ -1274,9 +1245,6 @@ CacheMemory::cacheProbetoBk(Addr address, bool is_aggressive)
     int64_t cacheSet = addressToCacheSet(address);
     Tick least_tick = curTick() + 1;
     int victim_pos = m_cache_assoc;
-    //int null_pos = m_cache_assoc;
-    // get back up entry number
-    // int backup_entry = 0;
     int free_entry = 0;
     for (int i = 0; i < m_cache_assoc; i ++) {
         if (m_cache[cacheSet][i] != NULL) {
@@ -1287,15 +1255,9 @@ CacheMemory::cacheProbetoBk(Addr address, bool is_aggressive)
                              , m_cache[cacheSet][i]->m_is_backup
                              , m_cache[cacheSet][i]->m_dir_bkup.size());
             assert(m_cache[cacheSet][i]->getLastAccess() < curTick() + 1);
-            // if (m_cache[cacheSet][i]->m_is_backup) {
-            //     backup_entry ++;
-            // }
             if (m_cache[cacheSet][i]->m_is_backup && m_cache[cacheSet][i]->m_dir_bkup.size() < m_dir_tag_per_line) {
                 // this entry has been occupied and is still available
                 m_cache[cacheSet][i]->setLastAccess(curTick());
-                // set up index
-                // m_tag_index[address] = i;
-                // delete entry;
                 return -1;
             }
             if (m_cache[cacheSet][i]->getLastAccess() < least_tick &&
@@ -1315,20 +1277,6 @@ CacheMemory::cacheProbetoBk(Addr address, bool is_aggressive)
             }
         }
     }
-    // if (null_pos < m_cache_assoc && backup_entry < m_dir_tag_per_line) {
-    //     // allocate a new entry and set to be backup
-    //     assert(m_cache[cacheSet][null_pos] == NULL);
-    //     //AbstractCacheEntry* new_cache_entry = new AbstractCacheEntry;
-    //     m_cache[cacheSet][null_pos] = entry;  // Init entry
-    //     m_cache[cacheSet][null_pos]->m_Address = -1;
-    //     m_cache[cacheSet][null_pos]->m_Permission = AccessPermission_Invalid;
-    //     m_cache[cacheSet][null_pos]->m_locked = -1;
-    //     //m_tag_index[address] = null_pos;
-    //     m_cache[cacheSet][null_pos]->setPosition(cacheSet, null_pos);
-    //     m_cache[cacheSet][null_pos]->setLastAccess(curTick());
-    //     m_cache[cacheSet][null_pos]->m_is_backup = true;
-    //     return -1;
-    // }
     DPRINTF(RubyCache, "cacheProbetoBk::cacheSet=%x, free_entry=%d, pending=%d\n"
                      , cacheSet, free_entry, m_set_pending_addr[cacheSet].size());
     if (free_entry > m_set_pending_addr[cacheSet].size()) {
@@ -1370,25 +1318,6 @@ CacheMemory::reviseIndex(Addr address) {
     assert(pos < m_cache_assoc);
     m_tag_index[address] = pos;
 }
-
-// void
-// CacheMemory::updateSharerNum(Addr address, int sharersNum) {
-//     assert(address == makeLineAddress(address));
-//     int64_t cacheSet = addressToCacheSet(address);
-//     DPRINTF(RubyCache, "updateSharerNum::addr=%x, set=%x, sharersNum=%d\n"
-//                      , address, cacheSet, sharersNum);
-
-//     for (int i = 0; i < m_cache_assoc; i ++) {
-//         if (m_cache[cacheSet][i] == NULL) {
-//             continue;
-//         }
-//         // get an entry has been set as backup
-//         if (m_cache[cacheSet][i]->address == address) {
-//             m_cache[cacheSet][i]->m_sharer_num = sharersNum;
-//         }
-//     }
-// }
-
 
 CacheMemory::
 CacheMemoryStats::CacheMemoryStats(statistics::Group *parent)

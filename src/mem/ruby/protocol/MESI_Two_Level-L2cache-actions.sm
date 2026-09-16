@@ -305,8 +305,6 @@ action(ex_sendExclusiveDataToGetSRequestors, "ex", desc="Send data from cache to
     assert(is_valid(tbe));
     assert(tbe.L1_GetS_IDs.count() == 1);
     enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
-        //DirEntry dir_entry := getDirEntry(address);
-        //assert(is_valid(dir_entry));
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:DATA_EXCLUSIVE;
         out_msg.Sender := machineID;
@@ -321,8 +319,6 @@ action(ex_sendExclusiveDataToGetSRequestors, "ex", desc="Send data from cache to
 action(ee_sendDataToGetXRequestor, "ee", desc="Send data from cache to GetX ID") {
     enqueue(responseL2Network_out, ResponseMsg, to_l1_latency) {
         assert(is_valid(tbe));
-        //DirEntry dir_entry := getDirEntry(address);
-        //assert(is_valid(dir_entry));
         out_msg.addr := address;
         out_msg.Type := CoherenceResponseType:DATA;
         out_msg.Sender := machineID;
@@ -358,7 +354,6 @@ action(fwm_sendFwdInvToSharersMinusRequestor, "fwm", desc="invalidate sharers fo
     peek(L1RequestL2Network_in, RequestMsg) {
         enqueue(L1RequestL2Network_out, RequestMsg, to_l1_latency) {
             DirEntry dir_entry := getDirEntry(address);
-            //assert(is_valid(cache_entry));
             assert(is_valid(dir_entry));
             out_msg.addr := address;
             out_msg.Type := CoherenceRequestType:INV;
@@ -381,7 +376,6 @@ action(fwup_sendFwdUpgradeOrGetxToOwner, "fwup", desc="forward upgrade to Owner 
             out_msg.addr := address;
             assert(in_msg.Type == CoherenceRequestType:UPGRADE ||
                    in_msg.Type == CoherenceRequestType:GETX);
-            //out_msg.Type := CoherenceRequestType:UPGRADE;
             out_msg.Type := in_msg.Type;
             out_msg.Requestor := in_msg.Requestor;
             out_msg.Destination.add(Owner);
@@ -413,7 +407,6 @@ action(i_allocateTBE, "i", desc="Allocate TBE for request") {
         check_allocate(TBEs);
         DirEntry dir_entry := getDirEntry(address);
         State state := getState(tbe, cache_entry, address);
-        //assert(is_valid(dir_entry));
         DPRINTF(RubySlicc, "i_allocateTBE::addr=%x, state=%d\n"
                         , address, state);
 
@@ -602,11 +595,8 @@ action(mr_writeDataToCacheFromRespond, "mrs", desc="Write data from response que
 }
 
 action(c_checkCache, "ccc", desc="Check cache can be allocate before back invalidation") {
-    //peek(L1RequestL2Network_in, RequestMsg) {
-    //assert(is_valid(tbe));
     bool request_need_allocate_cache := needAllocateCache(getState(tbe, cache_entry, address), address, cache_entry);
     bool evict_need_allocate_cache := isCacheToEvict(tbe) || isDirToEvict(tbe);
-    //assert(evict_need_allocate_cache || request_need_allocate_cache);
     DPRINTF(RubySlicc, "c_checkCache::addr=%x, evict_need_ac=%d, request_need_ac=%d\n"
                     , address, evict_need_allocate_cache, request_need_allocate_cache);
 
@@ -725,7 +715,6 @@ action(s_switchDirBk, "\sbk", desc="switch dir tag from directory to cache as ba
     DPRINTF(RubySlicc, "s_switchDirBk::addr=%x, Requestor=%d, exclusive=%d\n"
                      , address, dir_entry.Sharers, dir_entry.Exclusive);
     assert(dir_entry.Sharers.count() == 1);
-    //assert(dir_entry.Exclusive == dir_entry.Sharers.smallestElement());
     set_cache_entry(L2cache.insertDirBk(address, dir_entry.Sharers.smallestElement(), new CacheEntry));
 }
 
